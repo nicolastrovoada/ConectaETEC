@@ -26,12 +26,12 @@ As decisões abaixo orientam a implementação e explicam o comportamento atual 
 
 | Tema | Decisão |
 | --- | --- |
-| Reset da demonstração | Banco de demonstração recriado com usuários de teste, sem entregas, transações, resgates, notificações, conquistas ou auditoria; recompensas com estoque cheio. |
+| Dados iniciais e demonstração | O banco nasce vazio; não há seed automático no boot. O seed de demonstração é uma fixture de teste, fora da subida normal. Quando não há usuários, o primeiro coordenador é criado via bootstrap pelas variáveis `BOOTSTRAP_ADMIN_*`. |
 | Exclusão de atividade | Exclusão lógica: a atividade deixa de aparecer para professor e alunos, permanece visível para a coordenação e mantém os pontos já concedidos. |
 | Janela de atraso | Padrão de 7 dias quando o professor não define outro valor; configurável por atividade, com 0 para nenhuma tolerância. |
 | Envio fora da janela | Bloqueado, com indicação de prazo encerrado. |
 | Meia pontuação | Aplicada automaticamente em aprovação de entrega atrasada, com arredondamento para cima: `ceil(pontuação / 2)`. |
-| Grade curricular | Disciplinas da BNCC acrescidas das disciplinas técnicas do curso, centralizadas no seed para edição posterior. |
+| Grade curricular | Disciplinas da BNCC acrescidas das disciplinas técnicas do curso, centralizadas no seed de demonstração (fixture de teste) para edição posterior. |
 | Reforço escolar | Conteúdo criado por professores para as próprias turmas, com lição, questões de verificação e anexos. |
 | Pontuação do reforço | Crédito único de pontos por reforço concluído, por aluno, com valor configurável por reforço (padrão 5) e registro como transação do tipo `study_content`. |
 | Notificações | Transitórias desaparecem após a exibição; persistentes permanecem até leitura ou resolução. |
@@ -49,7 +49,7 @@ As decisões abaixo orientam a implementação e explicam o comportamento atual 
 
 | Fase | Situação | Escopo |
 | --- | --- | --- |
-| 1 — Dados e seed | Concluída | Seed limpo, turmas, grade BNCC e técnica, remoção de conquistas e reset da auditoria. |
+| 1 — Dados e seed | Concluída | Seed de demonstração limpo, usado como fixture de teste; turmas, grade BNCC e técnica, remoção de conquistas e reset da auditoria. |
 | 2 — Gamificação e atividades | Concluída | Janela de atraso, meia pontuação, exclusão lógica e isolamento por papel. |
 | 3 — Reforço e notificações | Concluída | Reforço escolar, conclusão única, notificações transitórias e persistentes e avisos da coordenação. |
 | 4 — Validação, painéis, relatórios, auditoria e perfil | Parcialmente concluída | Filtros, painéis, relatórios e auditoria; a edição de perfil pelo próprio usuário permanece pendente. |
@@ -58,11 +58,11 @@ As decisões abaixo orientam a implementação e explicam o comportamento atual 
 
 ### Fase 1 — Dados e seed
 
-- Seed idempotente com banco limpo: usuários de demonstração mantidos; sem atividades, entregas, transações, notificações ou auditoria; recompensas com estoque cheio.
+- Seed de demonstração idempotente, usado como fixture de teste, com banco limpo: usuários de demonstração mantidos; sem atividades, entregas, transações, notificações ou auditoria; recompensas com estoque cheio.
 - Turmas 1º Ano A, 2º Ano A e 3º Ano A, com curso, turno, alunos distribuídos e professor responsável.
-- Grade curricular com 12 disciplinas da BNCC — Português, Matemática, Inglês, Artes, Educação Física, Filosofia, Sociologia, Biologia, Física, Química, História e Geografia — e disciplinas técnicas do curso, centralizadas no seed.
-- Remoção completa de conquistas: tipos, serviços, rotas, interface, tabela, seed, testes, auditoria e notificações relacionadas.
-- Reset da tabela de auditoria no seed, sem quebrar migrações anteriores.
+- Grade curricular com 12 disciplinas da BNCC — Português, Matemática, Inglês, Artes, Educação Física, Filosofia, Sociologia, Biologia, Física, Química, História e Geografia — e disciplinas técnicas do curso, centralizadas no seed de demonstração usado como fixture de teste.
+- Remoção completa de conquistas: tipos, serviços, rotas, interface, tabela, seed de demonstração, testes, auditoria e notificações relacionadas.
+- Reset da tabela de auditoria no seed de demonstração (fixture de teste), sem quebrar migrações anteriores.
 
 ### Fase 2 — Gamificação e atividades
 
@@ -121,7 +121,7 @@ As decisões abaixo orientam a implementação e explicam o comportamento atual 
 | `StudyContentCompletion` | Nova tabela com aluno, reforço, data de conclusão e restrição de unicidade por aluno e reforço. |
 | `Notice` | Nova entidade com título, mensagem, alcance (`all` ou turmas), autor e data de criação. |
 | Conquistas | Removidas do modelo, dos serviços, da interface e dos testes. |
-| `AuditLog` | Sem mudança estrutural; exibição com data e hora, filtros e reset no seed. |
+| `AuditLog` | Sem mudança estrutural; exibição com data e hora, filtros e reset no seed de demonstração (fixture de teste). |
 
 As migrações 004 a 007 concentram as alterações estruturais da V3: a 004 adiciona a janela de atraso, a exclusão lógica, o indicador de atraso, as notificações transitórias, as colunas do reforço, os avisos e as conclusões de reforço; a 005 remove a tabela de conquistas; a 006 cria os anexos do reforço e amplia o tipo de transação para `study_content`; a 007 adiciona `notifications.relatedActivityId`.
 
@@ -140,7 +140,7 @@ A verificação da V3 combina testes automatizados e revisão funcional dos flux
 - **Edição de perfil pendente:** o perfil permanece somente leitura nesta versão; não há edição de nome, foto ou senha pelo próprio usuário.
 - **Anexos de atividades excluídas:** o ajuste para bloquear o download de evidências de atividades excluídas está previsto na fase de limpeza técnica.
 - **Dívidas técnicas:** existem pequenos ajustes de código e de testes planejados para a revisão final.
-- **Lista de disciplinas:** a grade curricular é editável manualmente no seed e ainda não possui interface de manutenção.
+- **Lista de disciplinas:** a grade curricular é mantida nos dados do seed de demonstração (fixture de teste) e ainda não possui interface de manutenção.
 - **Persistência local:** o banco SQLite é um arquivo local, sem replicação, backup automatizado ou operação multi-instância.
 - **Infraestrutura:** não há URL pública de demonstração nem configuração de deploy com HTTPS neste repositório.
 - **Integração institucional:** não há integração com sistemas acadêmicos, como o SIGA, nem login único institucional.

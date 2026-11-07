@@ -32,16 +32,6 @@ export const config = {
   maxAttachmentBytes: 5 * 1024 * 1024, // 5 MB
 } as const
 
-/**
- * Seed demo é executado apenas fora de produção — as credenciais `123456` são
- * exclusivamente para teste local — ou quando SEED_DEMO=1 for definido
- * explicitamente (ex.: provisionar dados de demonstração em um ambiente pré-prod).
- */
-export function shouldRunSeed(): boolean {
-  if (process.env.SEED_DEMO === "1") return true
-  return process.env.NODE_ENV !== "production"
-}
-
 export const ALLOWED_UPLOAD_MIME_TYPES: ReadonlySet<string> = new Set([
   "image/jpeg",
   "image/png",

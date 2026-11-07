@@ -52,7 +52,8 @@ function candidateEnvFiles(): string[] {
 
 export function loadEnvironment(): void {
   // Testes definem o ambiente em `tests/setup-env.ts` e não podem herdar um
-  // `.env` do desenvolvedor (por exemplo, `NODE_ENV=production` ou `SEED_DEMO=1`).
+  // `.env` do desenvolvedor (por exemplo, `NODE_ENV=production` ou
+  // `BOOTSTRAP_ADMIN_*`).
   if (process.env.NODE_ENV === "test" || process.env.VITEST) return
 
   loadDotenv({

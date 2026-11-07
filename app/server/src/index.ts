@@ -4,8 +4,7 @@ import { config } from "./config"
 import { createApp } from "./app"
 import { getDb } from "./db/connection"
 import { runSchema } from "./db/schema"
-import { runSeed } from "./db/seed"
-import { shouldRunSeed } from "./config"
+import { bootstrapAdminFromEnv } from "./db/bootstrap"
 import { deleteExpiredSessions } from "./auth/session"
 
 const PORT = config.port
@@ -15,7 +14,10 @@ function bootstrap(): void {
 
   const db = getDb()
   runSchema(db)
-  if (shouldRunSeed()) runSeed(db)
+  // Cria o coordenador inicial somente quando o banco está vazio e as variáveis
+  // BOOTSTRAP_ADMIN_* foram definidas. O seed de demonstração NÃO roda no boot:
+  // `runSeed` é fixture exclusiva de teste.
+  bootstrapAdminFromEnv(db)
   deleteExpiredSessions()
 
   const app = createApp()

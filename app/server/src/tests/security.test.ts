@@ -2,7 +2,6 @@ import { describe, it, expect, beforeAll, beforeEach } from "vitest"
 import { makeApp, prepareDb, loginAgent, USERS } from "./helpers"
 import { createTransaction } from "./fixtures"
 import { enforceApiRateLimit, resetApiRateLimits } from "../auth/rateLimit"
-import { shouldRunSeed } from "../config"
 import type { Express } from "express"
 
 describe("Frente 1 — segurança no servidor (1.4 a 1.8)", () => {
@@ -38,38 +37,6 @@ describe("Frente 1 — segurança no servidor (1.4 a 1.8)", () => {
       .send({ label: "Forçar limite", points: 50, stock: 10 })
     expect(res.status).toBe(429)
     expect(res.body.error).toBeDefined()
-  })
-
-  it("seed demo bloqueado em produção (SEM_SEED_DEMO)", () => {
-    const previousNodeEnv = process.env.NODE_ENV
-    const previousSeed = process.env.SEED_DEMO
-    try {
-      delete process.env.SEED_DEMO
-      process.env.NODE_ENV = "production"
-      expect(shouldRunSeed()).toBe(false)
-    } finally {
-      if (previousNodeEnv === undefined) delete process.env.NODE_ENV
-      else process.env.NODE_ENV = previousNodeEnv
-      if (previousSeed === undefined) delete process.env.SEED_DEMO
-      else process.env.SEED_DEMO = previousSeed
-    }
-  })
-
-  it("seed demo roda em dev e com SEED_DEMO=1 explícito", () => {
-    const previousNodeEnv = process.env.NODE_ENV
-    const previousSeed = process.env.SEED_DEMO
-    try {
-      process.env.NODE_ENV = "development"
-      expect(shouldRunSeed()).toBe(true)
-      process.env.NODE_ENV = "production"
-      process.env.SEED_DEMO = "1"
-      expect(shouldRunSeed()).toBe(true)
-    } finally {
-      if (previousNodeEnv === undefined) delete process.env.NODE_ENV
-      else process.env.NODE_ENV = previousNodeEnv
-      if (previousSeed === undefined) delete process.env.SEED_DEMO
-      else process.env.SEED_DEMO = previousSeed
-    }
   })
 
   it("PATCH /redemptions ignora processedBy do body e usa a sessão", async () => {

@@ -36,7 +36,7 @@ Outros comandos:
 | `npm run typecheck` | Executa a verificação de tipos de servidor e cliente. |
 | `npm run test` | Executa as suítes de testes de servidor e cliente. |
 
-A suíte reúne **566 testes** (354 no servidor e 212 no cliente), distribuídos em **42 arquivos de teste**.
+A suíte cobre servidor e cliente em dezenas de arquivos de teste, incluindo autenticação, permissões por papel, migrações, gamificação, uploads e o bootstrap do primeiro coordenador.
 
 ### Variáveis de ambiente
 
@@ -47,16 +47,18 @@ A suíte reúne **566 testes** (354 no servidor e 212 no cliente), distribuídos
 | `DATA_DIR` | `server/data` | Diretório de persistência do servidor. |
 | `UPLOAD_DIR` | `server/data/uploads` | Diretório dos anexos enviados. |
 | `CORS_ORIGIN` | `http://localhost:5173` | Origem permitida para requisições com credenciais. |
-| `NODE_ENV` | desenvolvimento | Em `production`, ativa o cookie de sessão com `secure` e desativa o seed de demonstração por padrão. |
-| `SEED_DEMO` | não definido (`0` no exemplo) | Com `1`, força a execução do seed de demonstração, inclusive fora do ambiente de desenvolvimento. O seed só popula um banco sem usuários. |
+| `NODE_ENV` | desenvolvimento | Em `production`, ativa o cookie de sessão com `secure`. |
+| `BOOTSTRAP_ADMIN_NAME` | vazio | Nome do coordenador inicial. Só é usado quando o banco não tem **nenhum** usuário. |
+| `BOOTSTRAP_ADMIN_EMAIL` | vazio | E-mail do coordenador inicial (normalizado para minúsculas). Só é usado em banco vazio. |
+| `BOOTSTRAP_ADMIN_PASSWORD` | vazio | Senha do coordenador inicial (mínimo de 6 caracteres, gravada com hash). Só é usada em banco vazio. |
 
 Os caminhos padrão são relativos ao diretório de execução do workspace do servidor (`app/server`).
 
-O schema e o seed rodam automaticamente na subida (`server/src/index.ts`), de forma idempotente. O seed só popula um banco sem usuários e é desativado por padrão em `NODE_ENV=production`.
+O schema e as migrações rodam automaticamente na subida (`server/src/index.ts`), de forma idempotente. O **seed de demonstração NÃO roda no boot**: `runSeed` é uma fixture exclusiva de teste. Em um banco vazio, a coordenação inicial é criada via `BOOTSTRAP_ADMIN_*` (as três juntas); sem essas variáveis, o banco sobe vazio e o cadastro é feito depois pela própria coordenação. Se apenas parte das variáveis for definida, o boot falha em vez de criar um administrador incompleto. Após o primeiro boot, as variáveis passam a ser ignoradas porque o banco já tem usuário.
 
 ## Migrações versionadas
 
-O schema do banco vive em `server/src/db/migrations/` e é aplicado por um runner versionado (`runMigrations`), que roda **antes do seed** na subida e nos testes (`helpers.ts`). A tabela `schema_migrations` registra as versões já aplicadas; cada migração pendente roda dentro de uma transação própria e só é marcada ao concluir com sucesso (falha gera ROLLBACK).
+O schema do banco vive em `server/src/db/migrations/` e é aplicado por um runner versionado (`runMigrations`), que roda na subida (antes do bootstrap do coordenador) e nos testes (`helpers.ts`). A tabela `schema_migrations` registra as versões já aplicadas; cada migração pendente roda dentro de uma transação própria e só é marcada ao concluir com sucesso (falha gera ROLLBACK). O seed de demonstração, quando usado, é chamado explicitamente pelos testes/fixtures — nunca pelo boot.
 
 Para adicionar uma migração nova:
 
@@ -76,22 +78,9 @@ Versões atuais:
 
 Depois de **cada** migração aplicada, o runner executa `PRAGMA foreign_key_check` e falha (com ROLLBACK, sem gravar a versão) se houver referência órfã.
 
-## Credenciais de demonstração
-
-As contas abaixo são criadas pelo seed local. A senha de todas é `123456`.
-
-| Perfil | E-mail |
-| --- | --- |
-| Aluno | ana@etec.sp.gov.br |
-| Professor | marcelo@etec.sp.gov.br |
-| Funcionário | carlos@etec.sp.gov.br |
-| Coordenação | juliana@etec.sp.gov.br |
-
-> **Aviso:** essas credenciais servem exclusivamente para teste local. Não use em ambiente público. As senhas são armazenadas com hash `bcryptjs`; o seed de demonstração é desativado em `NODE_ENV=production` por padrão. O cadastro de novos usuários é restrito à coordenação.
-
 ## Recursos implementados
 
-- Backend e banco de dados persistente (SQLite, schema e seed idempotentes, WAL e transações).
+- Backend e banco de dados persistente (SQLite, schema/migrações idempotentes, seed de demonstração como fixture de teste, WAL e transações).
 - Autenticação com senhas protegidas por hash e sessão server-side (RN01), com token de sessão `httpOnly` e limitação de tentativas de login.
 - Controle de permissões no servidor e proteção das APIs (`requireAuth`/`requireRoles`, guardas de posse e auditoria de acesso negado).
 - Upload de evidências e anexos (imagens + PDF, até três arquivos de 5 MB) com limpeza de arquivos órfãos.
@@ -105,7 +94,7 @@ As contas abaixo são criadas pelo seed local. A senha de todas é `123456`.
 ```text
 app/
   client/src/          # React: lib (api/format/labels), context, componentes de UI, features e páginas por papel
-  server/src/          # Express: app, auth, config, db (schema/seed/queries/migrações), lib, routes, services e tests
+  server/src/          # Express: app, auth, config, db (schema/bootstrap/seed/queries/migrações), lib, routes, services e tests
   shared/types.ts      # contrato compartilhado
   docs/api-contract.md # documentação da API
 ```
