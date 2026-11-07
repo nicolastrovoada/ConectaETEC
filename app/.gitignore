@@ -1,0 +1,18 @@
+node_modules
+dist
+.env
+*.local
+*.sqlite
+*.sqlite3
+server/data/uploads
+server/data/*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.tsbuildinfo
+.DS_Store
+*.log
+# Scratch do orquestrador (relatórios de task). A proteção real também existe em
+# .superpowers/sdd/.gitignore; esta linha cobre o diretório inteiro, para que um
+# relatório escrito fora de sdd/ não apareça no git status nem seja commitado.
+.superpowers/

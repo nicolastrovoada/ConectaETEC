@@ -1,0 +1,87 @@
+# Dependências
+node_modules/
+
+# Artefatos de build
+dist/
+build/
+
+# Logs
+*.log
+dev.log
+dev.run.log
+
+# Variáveis de ambiente (permite o arquivo de exemplo)
+.env
+.env.*
+!.env.example
+
+# Bancos de dados locais
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite
+*.sqlite3
+app/server/data/*.db
+server/data/*.db
+
+# Dados locais do servidor (banco, WAL, uploads e demais arquivos locais)
+app/server/data/
+
+# Uploads locais do servidor
+app/server/data/uploads/
+server/data/uploads/
+
+# Backup local do repositório Git
+app/.git-local-backup/
+
+# Cache, artefatos de teste e build incremental
+coverage/
+*.tsbuildinfo
+
+# Ferramentas locais e material não versionado
+.superpowers/
+**/.superpowers/
+.opencode/
+opencode.json
+skills-lock.json
+Arquivos_fonte/
+docs/superpowers/
+
+# Documento não publicado
+docs/ConectaETEC-V3.md
+
+# Configurações locais de ferramentas
+.claude/
+.agents/
+AGENTS.md
+.mcp.json
+*.code-workspace
+
+# Material-fonte não versionado
+Arquivos_fonte/**/*.pdf
+*.docx
+*.pptx
+*.xlsx
+*.zip
+codigo.txt
+
+# Ambiente local, editores e sistema operacional
+*.local
+.vite/
+.idea/
+.vscode/
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Garantias: arquivos que DEVEM permanecer versionados
+!package.json
+!app/package.json
+!package-lock.json
+!app/package-lock.json
+!README.md
+!docs/README.md
+!app/README.md
+!docs/ROADMAP.md
+!app/docs/api-contract.md
