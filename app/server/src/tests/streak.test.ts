@@ -2,13 +2,16 @@ import { describe, it, expect, beforeAll } from "vitest"
 import { makeApp, prepareDb, loginAgent, USERS, brDateInDays } from "./helpers"
 import { createActivity, createSubmission } from "./fixtures"
 import { getDb } from "../db/connection"
+// O "hoje" do teste tem que ser o MESMO "hoje" de São Paulo usado pelo servidor
+// (via `lib/dates`), e não o relógio local da máquina: num runner UTC perto da
+// meia-noite o dia local já virou enquanto o de São Paulo não, e as aprovações
+// plantadas caem no dia errado (streak 2 em vez de 3, sem marco).
+import { brDateInDays as brDateSP } from "../lib/dates"
 import type { Express } from "express"
 
-const DAY_MS = 86_400_000
-
-/** Data de hoje há `daysAgo` dias, no formato pt-BR igual ao nowBR(). */
+/** Data de `daysAgo` dias atrás, ancorada no dia de calendário de São Paulo. */
 function brDate(daysAgo: number): string {
-  return new Date(Date.now() - daysAgo * DAY_MS).toLocaleString("pt-BR")
+  return `${brDateSP(-daysAgo)} 12:00:00`
 }
 
 describe("Sequência de participação (RF07) — streak na aprovação", () => {

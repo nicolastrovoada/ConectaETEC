@@ -5,6 +5,7 @@ import { createApp } from "../app"
 import { getDb, resetDb } from "../db/connection"
 import { runSchema } from "../db/schema"
 import { runSeed } from "../db/seed"
+import { brDateInDays } from "../lib/dates"
 
 /** Cria banco em memória limpo com schema + seed de demonstração. */
 export function prepareDb() {
@@ -32,13 +33,16 @@ export function makeApp(): Express {
   return createApp()
 }
 
-/** Data local daqui a `days` dias no formato DD/MM/AAAA (prazos futuros). */
-export function brDateInDays(days: number): string {
-  const d = new Date()
-  d.setDate(d.getDate() + days)
-  const pad = (n: number) => String(n).padStart(2, "0")
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`
-}
+/**
+ * Data daqui a `days` dias no formato DD/MM/AAAA, contada no dia de calendário
+ * de America/Sao_Paulo — a MESMA fonte de verdade que o servidor usa.
+ *
+ * Reexportada de `../lib/dates` para não quebrar os testes que já a importam de
+ * `./helpers`. Implementar isso com o relógio local da máquina fazia o "hoje"
+ * do teste divergir do "hoje" do servidor num runner UTC perto da meia-noite
+ * (o dia local já tinha virado, o de São Paulo não).
+ */
+export { brDateInDays }
 
 /** Usuários demo do seed da V3 (1º/2º/3º ano do Técnico em Administração). */
 export const USERS = {
