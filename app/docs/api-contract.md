@@ -189,7 +189,7 @@ Atividades excluídas logicamente não entram nos indicadores nem nos relatório
 
 | Método | Rota | Permissão | Descrição |
 | --- | --- | --- | --- |
-| GET | `/api/audit?role=&action=&date=&user=` | coordenação | Consulta os registros de auditoria com filtros por papel, ação, data e nome do usuário. Com `page` e/ou `pageSize`, devolve `{ data: { items, total, page, pageSize } }` (padrão 50, máximo 200). Sem esses parâmetros, mantém o formato `{ data: AuditLog[] }` com `limit` (padrão 500, máximo 2000). |
+| GET | `/api/audit?role=&action=&date=&user=&from=&to=&search=` | coordenação | Consulta os registros de auditoria com filtros por papel, ação, data, nome do usuário, período e busca textual. `from`/`to` usam `YYYY-MM-DD` e são **inclusivos por dia** (datas de calendário inexistentes, como `2020-02-31`, são ignoradas). `search` é accent-insensitive e literal (`%` e `_` não são curinga), pesquisando nome do usuário, ação e descrição. No modo legado (`action`, `date`, `user`), `action`/`user` também são accent-insensitive e literais, enquanto `date` compara o texto `DD/MM/AAAA` do timestamp. Com `page` e/ou `pageSize`, devolve `{ data: { items, total, page, pageSize } }` (padrão 50, máximo 200). Sem esses parâmetros, mantém o formato `{ data: AuditLog[] }` com `limit` (padrão 500, máximo 2000). A ordenação é do timestamp mais recente para o mais antigo. |
 
 Os registros de auditoria são criados exclusivamente pelo servidor. Não existe rota pública de escrita em `/api/audit`.
 
