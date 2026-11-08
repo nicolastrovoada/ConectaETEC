@@ -6,9 +6,12 @@ import { afterEach } from "vitest"
 import { cleanup } from "@testing-library/react"
 
 // Desmonta componentes entre os testes (o auto-cleanup do RTL também funciona
-// com `globals: true`, mas garantimos explicitamente).
-afterEach(() => {
+// com `globals: true`, mas garantimos explicitamente) e dá um tick para a fila
+// de macrotasks esvaziar. Sem isso, eventos pendentes do userEvent (que agenda
+// um timeout por tecla por padrão) podem sobrar para o teste seguinte.
+afterEach(async () => {
   cleanup()
+  await new Promise((resolve) => setTimeout(resolve, 0))
 })
 
 // Resolve URLs relativas como o navegador faz (contra a origem atual do jsdom).

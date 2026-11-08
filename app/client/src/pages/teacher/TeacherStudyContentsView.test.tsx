@@ -147,7 +147,7 @@ const dialogo = () => within(screen.getByRole("dialog"))
 
 describe("Professor — Meus reforços (3.2)", () => {
   it("criar reforço envia o formulário inteiro e o reforço aparece na lista", async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     renderView()
 
     expect(await screen.findByRole("article", { name: "Regra dos três" })).toBeInTheDocument()
@@ -192,7 +192,7 @@ describe("Professor — Meus reforços (3.2)", () => {
   })
 
   it("editar envia PATCH do reforço certo e a lista mostra o título novo", async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     renderView()
 
     await user.click(within(await screen.findByRole("article", { name: "Regra dos três" })).getByRole("button", { name: /Editar/ }))
@@ -237,7 +237,7 @@ describe("Professor — Meus reforços (3.2)", () => {
   })
 
   it("excluir o próprio reforço pede confirmação e some da lista", async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     renderView()
 
     await user.click(within(await screen.findByRole("article", { name: "Regra dos três" })).getByRole("button", { name: /Excluir/ }))
@@ -247,12 +247,14 @@ describe("Professor — Meus reforços (3.2)", () => {
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Confirmar exclusão/ }))
 
     await waitFor(() => expect(deletados).toEqual(["sc1"]))
-    expect(screen.queryByRole("article", { name: "Regra dos três" })).not.toBeInTheDocument()
+    // O DELETE já foi visto pelo MSW, mas o estado do React só é atualizado
+    // quando a resposta resolve; espera o DOM acompanhar (não só o servidor).
+    await waitFor(() => expect(screen.queryByRole("article", { name: "Regra dos três" })).not.toBeInTheDocument())
     expect(await screen.findByText(/Reforço "Regra dos três" excluído/)).toBeInTheDocument()
   })
 
   it("excluir reforço já concluído (409) vira mensagem de negócio, não tela quebrada", async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     server.use(
       http.delete("/api/study-contents/:id", () =>
         HttpResponse.json(
@@ -279,7 +281,7 @@ describe("Professor — Meus reforços (3.2)", () => {
   })
 
   it("anexar material de apoio sobe o arquivo para o reforço e a lista mostra o anexo", async () => {
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
     server.use(
       http.get("/api/study-contents", () =>
         HttpResponse.json({

@@ -30,5 +30,10 @@ export default defineConfig({
     globals: true,
     css: false,
     setupFiles: ['./src/test/setup.ts'],
+    // O default do Vitest (5s) é apertado para telas grandes: no teste de
+    // "criar reforço" há ~120 eventos de teclado via userEvent sob jsdom e,
+    // quando todos os arquivos rodam em paralelo, o tempo de CPU cresce.
+    // 15s dá folga para a variação de carga sem esconder um teste travado.
+    testTimeout: 15_000,
   },
 })
