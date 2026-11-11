@@ -50,6 +50,8 @@ export interface ActivityFixture {
   deadline?: string
   type?: ActivityType
   status?: Activity["status"]
+  /** Timestamp `DD/MM/AAAA, HH:MM:SS`; padrão = agora (para relatórios por período). */
+  createdAt?: string
 }
 
 /** `teacherIds` da turma, como está no banco (JSON). */
@@ -135,7 +137,7 @@ export function createActivity(db: DatabaseSync, fixture: ActivityFixture): stri
     fixture.deadline ?? brDateInDays(7),
     fixture.type ?? "academic",
     fixture.status ?? "active",
-    nowBR(),
+    fixture.createdAt ?? nowBR(),
   )
   return id
 }
@@ -150,30 +152,48 @@ export interface SubmissionFixture {
   validatedBy?: string
   validatedAt?: string
   feedback?: string
+  /** `true` = entregue depois do prazo (coluna `delayed`). */
+  delayed?: boolean
 }
 
 /** Estados em que a entrega já passou por validação (RN03). */
 const STATUS_VALIDADOS = new Set(["approved", "rejected", "revision_required"])
 
-/** Cria uma entrega e devolve o id. `validatedBy`/`validatedAt` saem juntos. */
+/**
+ * Cria uma entrega e devolve o id. `validatedBy`/`validatedAt` saem juntos.
+ *
+ * A coluna `delayed` só existe a partir da migration 004. `plantLegacyRows`
+ * (`migrations.test.ts`) escreve num schema pré-004, onde ela ainda não existe,
+ * então o INSERT só inclui a coluna quando o fixture pede (`delayed` definido).
+ * No schema completo o DEFAULT da coluna já é `0`, então omitir é o mesmo que
+ * gravar uma entrega no prazo.
+ */
 export function createSubmission(db: DatabaseSync, fixture: SubmissionFixture): string {
   const id = fixture.id ?? `fx-sub-${uuid().slice(0, 8)}`
   const validada = STATUS_VALIDADOS.has(fixture.status)
-  db.prepare(
-    `INSERT INTO submissions (id, activityId, studentId, submittedAt, status, evidence, comment, validatedBy, validatedAt, feedback)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
+  const columns = ["id", "activityId", "studentId", "submittedAt", "status"]
+  const values: Array<string | number | null> = [
     id,
     fixture.activityId,
     fixture.studentId,
     fixture.submittedAt ?? nowBR(),
     fixture.status,
+  ]
+  if (fixture.delayed !== undefined) {
+    columns.push("delayed")
+    values.push(fixture.delayed ? 1 : 0)
+  }
+  columns.push("evidence", "comment", "validatedBy", "validatedAt", "feedback")
+  values.push(
     "Evidência do fixture de teste",
     "Comentário do fixture de teste",
     validada ? fixture.validatedBy ?? "u6" : null,
     validada ? fixture.validatedAt ?? nowBR() : null,
     fixture.feedback ?? "",
   )
+  db.prepare(
+    `INSERT INTO submissions (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+  ).run(...values)
   return id
 }
 
@@ -185,6 +205,8 @@ export interface TransactionFixture {
   description?: string
   relatedActivityId?: string
   createdBy?: string
+  /** Timestamp `DD/MM/AAAA, HH:MM:SS`; padrão = agora (para relatórios por período). */
+  createdAt?: string
 }
 
 /**
@@ -205,7 +227,7 @@ export function createTransaction(db: DatabaseSync, fixture: TransactionFixture)
     fixture.description ?? "Crédito do fixture local de teste",
     fixture.relatedActivityId ?? null,
     fixture.createdBy ?? "u9",
-    nowBR(),
+    fixture.createdAt ?? nowBR(),
   )
   return id
 }

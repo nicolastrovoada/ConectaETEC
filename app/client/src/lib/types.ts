@@ -1,6 +1,7 @@
 // Tipos de resposta da API (além dos contratos de entidade em @shared/types).
 import type {
   Activity,
+  ActivityType,
   PointsTransaction,
   Redemption,
   Reward,
@@ -88,6 +89,58 @@ export interface ActivitiesByTypeRow {
   type: string
   label: string
   count: number
+}
+
+/**
+ * Uma atividade no relatório de atrasos da coordenação (4.5) —
+ * `GET /api/reports/activity-detail`. `deadline` e `createdAt` chegam no formato
+ * gravado (`DD/MM/AAAA` / `DD/MM/AAAA, HH:MM:SS`) e são exibidos como vieram.
+ */
+export interface ActivityDetailReportRow {
+  activityId: string
+  title: string
+  type: ActivityType
+  subject: string
+  className: string
+  teacherName: string
+  deadline: string
+  createdAt: string
+  deliveries: number
+  approved: number
+  rejected: number
+  pending: number
+  late: number
+  donePct: number
+}
+
+/** Uma linha do ranking de pontos da coordenação: um aluno dentro de uma turma. */
+export interface ClassRankingRow {
+  studentName: string
+  points: number
+  level: string
+}
+
+/** Ranking por turma — a turma é a chave do grupo (4.5). */
+export interface ClassRankingGroup {
+  className: string
+  course: string
+  rows: ClassRankingRow[]
+}
+
+/** Uma linha do ranking de pontos por matéria: o aluno com a turma de origem. */
+export interface SubjectRankingRow {
+  studentName: string
+  className: string
+  points: number
+  level: string
+}
+
+/** Ranking por matéria — a matéria é a chave do grupo (4.5). */
+export interface SubjectRankingGroup {
+  subjectId: string
+  subjectName: string
+  icon: string
+  rows: SubjectRankingRow[]
 }
 
 /**

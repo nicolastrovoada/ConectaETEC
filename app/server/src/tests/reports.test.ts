@@ -4,7 +4,8 @@ import type { Express } from "express"
 import { getDb } from "../db/connection"
 import { brDateInDays as brDateInDaysSP, startOfToday } from "../lib/dates"
 import { currentStreakDays } from "../services/streak"
-import { createActivity, createSubmission } from "./fixtures"
+import { createActivity, createSubmission, createTransaction } from "./fixtures"
+import { levelLabel } from "../shared/types"
 
 /**
  * Contrato de `GET /api/reports/teacher-performance` (Task 4.2), espelhado do
@@ -565,5 +566,688 @@ describe("Desempenho do professor (Task 4.2)", () => {
     expect(Array.isArray(body.activities)).toBe(true)
     expect(Array.isArray(body.ranking)).toBe(true)
     expect(body.activities.length).toBeGreaterThan(0)
+  })
+})
+// ----------------------------------------------------------------------------
+// Task 4.5 — relatório completo da coordenação (filtros, detalhe e rankings)
+// ----------------------------------------------------------------------------
+
+interface CompletionBodyRow {
+  className: string
+  course: string
+  students: number
+  activities: number
+  possible: number
+  done: number
+  pct: number
+}
+
+interface ActivitiesByTypeBodyRow {
+  type: string
+  label: string
+  count: number
+}
+
+interface PointsBodyRow {
+  studentName: string
+  className: string
+  balance: number
+  level: string
+}
+
+interface ActivityDetailBodyRow {
+  activityId: string
+  title: string
+  type: string
+  subject: string
+  className: string
+  teacherName: string
+  deadline: string
+  createdAt: string
+  deliveries: number
+  approved: number
+  rejected: number
+  pending: number
+  late: number
+  donePct: number
+}
+
+interface ClassRankingBodyRow {
+  studentName: string
+  points: number
+  level: string
+}
+
+interface ClassRankingBodyGroup {
+  className: string
+  course: string
+  rows: ClassRankingBodyRow[]
+}
+
+interface SubjectRankingBodyRow {
+  studentName: string
+  className: string
+  points: number
+  level: string
+}
+
+interface SubjectRankingBodyGroup {
+  subjectId: string
+  subjectName: string
+  icon: string
+  rows: SubjectRankingBodyRow[]
+}
+
+/** GET autenticado que exige 200 e devolve `body.data` tipado. */
+async function getReport<T>(agent: Agent, path: string): Promise<T> {
+  const res = await agent.get(path)
+  expect(res.status, `GET ${path} falhou: ${JSON.stringify(res.body)}`).toBe(200)
+  return res.body.data as T
+}
+
+/**
+ * Banco limpo e próprio: o cenário abaixo planta atividades com datas
+ * históricas, entregas e transações para exercitar período, filtros e os dois
+ * rankings. Nenhum describe anterior pode vazar estado para cá.
+ */
+describe("Relatórios completos da coordenação (Task 4.5)", () => {
+  let app: Express
+  let coord: Agent
+  let marcelo: Agent
+  let ana: Agent
+  let claraId: string
+
+  /** Atividades do cenário. `aDraft` fica fora de completion/activity-detail. */
+  let a1: string
+  let a2: string
+  let a3: string
+  let a4: string
+  let a5: string
+  let a6: string
+  let aDraft: string
+
+  beforeAll(async () => {
+    prepareDb()
+    app = makeApp()
+    coord = await loginAgent(app, USERS.juliana.email)
+    marcelo = await loginAgent(app, USERS.marcelo.email)
+    ana = await loginAgent(app, USERS.ana.email)
+
+    // Terceiro aluno da c1: a atividade a1 precisa de 3 entregas (aprovada,
+    // reprovada e pendente) sem inventar matrícula fora do roster.
+    const clara = await coord.post("/api/users").send({
+      name: "Clara Nunes",
+      email: "clara@etec.sp.gov.br",
+      password: "123456",
+      role: "student",
+      classId: "c1",
+    })
+    expect(clara.status, `criação da aluna falhou: ${JSON.stringify(clara.body)}`).toBe(201)
+    claraId = clara.body.data.id as string
+
+    const db = getDb()
+    a1 = createActivity(db, {
+      classId: "c1",
+      teacherId: USERS.marcelo.id,
+      subjectId: "s2",
+      title: "Matemática c1",
+      deadline: "10/09/2026",
+      status: "active",
+      createdAt: "10/03/2026, 08:00:00",
+    })
+    a2 = createActivity(db, {
+      classId: "c1",
+      teacherId: USERS.marcelo.id,
+      subjectId: "s2",
+      title: "Matemática c1 2",
+      deadline: "11/09/2026",
+      status: "active",
+      createdAt: "20/03/2026, 08:00:00",
+    })
+    a3 = createActivity(db, {
+      classId: "c2",
+      teacherId: USERS.marcelo.id,
+      subjectId: "s2",
+      title: "Matemática c2",
+      deadline: "09/09/2026",
+      status: "active",
+      createdAt: "10/03/2026, 08:00:00",
+    })
+    a4 = createActivity(db, {
+      classId: "c2",
+      teacherId: USERS.sandra.id,
+      subjectId: "s1",
+      title: "Português c2",
+      deadline: "12/09/2026",
+      status: "active",
+      createdAt: "12/03/2026, 08:00:00",
+    })
+    a5 = createActivity(db, {
+      classId: "c3",
+      teacherId: USERS.marcelo.id,
+      subjectId: "s2",
+      title: "Matemática c3",
+      deadline: "13/09/2026",
+      status: "active",
+      createdAt: "10/03/2026, 08:00:00",
+    })
+    a6 = createActivity(db, {
+      classId: "c1",
+      teacherId: USERS.marcelo.id,
+      subjectId: "s1",
+      title: "Ação escolar c1",
+      type: "school_action",
+      deadline: "14/09/2026",
+      status: "active",
+      createdAt: "10/03/2026, 08:00:00",
+    })
+    aDraft = createActivity(db, {
+      classId: "c1",
+      teacherId: USERS.marcelo.id,
+      subjectId: "s2",
+      title: "Rascunho c1",
+      deadline: "15/09/2026",
+      status: "draft",
+      createdAt: "11/03/2026, 08:00:00",
+    })
+
+    // -- Entregas: a1 concentra aprovada/reprovada/pendente/atrasada ---------
+    createSubmission(db, {
+      activityId: a1,
+      studentId: USERS.ana.id,
+      status: "approved",
+      submittedAt: "10/03/2026, 09:00:00",
+      validatedBy: USERS.marcelo.id,
+      validatedAt: "10/03/2026, 10:00:00",
+    })
+    createSubmission(db, {
+      activityId: a1,
+      studentId: USERS.mateus.id,
+      status: "rejected",
+      submittedAt: "11/03/2026, 09:00:00",
+      validatedBy: USERS.marcelo.id,
+      validatedAt: "11/03/2026, 10:00:00",
+    })
+    createSubmission(db, {
+      activityId: a1,
+      studentId: claraId,
+      status: "under_review",
+      submittedAt: "12/03/2026, 09:00:00",
+      delayed: true,
+    })
+    createSubmission(db, {
+      activityId: a2,
+      studentId: USERS.ana.id,
+      status: "approved",
+      submittedAt: "20/03/2026, 09:00:00",
+      validatedBy: USERS.marcelo.id,
+      validatedAt: "20/03/2026, 10:00:00",
+    })
+    createSubmission(db, {
+      activityId: a3,
+      studentId: USERS.beatriz.id,
+      status: "approved",
+      submittedAt: "15/03/2026, 09:00:00",
+      validatedBy: USERS.marcelo.id,
+      validatedAt: "15/03/2026, 10:00:00",
+    })
+    createSubmission(db, {
+      activityId: a4,
+      studentId: USERS.ricardo.id,
+      status: "approved",
+      submittedAt: "10/03/2026, 09:00:00",
+      validatedBy: USERS.sandra.id,
+      validatedAt: "10/03/2026, 10:00:00",
+    })
+    createSubmission(db, {
+      activityId: a5,
+      studentId: USERS.fernanda.id,
+      status: "approved",
+      submittedAt: "10/03/2026, 09:00:00",
+      validatedBy: USERS.marcelo.id,
+      validatedAt: "10/03/2026, 10:00:00",
+    })
+    createSubmission(db, {
+      activityId: a6,
+      studentId: USERS.mateus.id,
+      status: "approved",
+      submittedAt: "11/03/2026, 09:00:00",
+      validatedBy: USERS.marcelo.id,
+      validatedAt: "11/03/2026, 10:00:00",
+    })
+
+    // -- Transações para os rankings -----------------------------------------
+    createTransaction(db, {
+      studentId: USERS.ana.id,
+      amount: 10,
+      type: "activity",
+      relatedActivityId: a1,
+      createdBy: USERS.marcelo.id,
+      createdAt: "10/03/2026, 12:00:00",
+    })
+    createTransaction(db, {
+      studentId: USERS.ana.id,
+      amount: 5,
+      type: "bonus",
+      createdBy: USERS.juliana.id,
+      createdAt: "10/03/2026, 12:00:00",
+    })
+    createTransaction(db, {
+      studentId: USERS.ana.id,
+      amount: 7,
+      type: "activity",
+      relatedActivityId: a2,
+      createdBy: USERS.marcelo.id,
+      createdAt: "20/03/2026, 12:00:00",
+    })
+    createTransaction(db, {
+      studentId: USERS.mateus.id,
+      amount: 20,
+      type: "activity",
+      relatedActivityId: a1,
+      createdBy: USERS.marcelo.id,
+      createdAt: "10/03/2026, 12:00:00",
+    })
+    createTransaction(db, {
+      studentId: USERS.beatriz.id,
+      amount: 30,
+      type: "activity",
+      relatedActivityId: a3,
+      createdBy: USERS.marcelo.id,
+      createdAt: "15/03/2026, 12:00:00",
+    })
+    createTransaction(db, {
+      studentId: USERS.beatriz.id,
+      amount: -5,
+      type: "reward_redemption",
+      createdBy: USERS.beatriz.id,
+      createdAt: "15/03/2026, 12:00:00",
+    })
+    createTransaction(db, {
+      studentId: USERS.ricardo.id,
+      amount: 40,
+      type: "activity",
+      relatedActivityId: a4,
+      createdBy: USERS.sandra.id,
+      createdAt: "10/03/2026, 12:00:00",
+    })
+    createTransaction(db, {
+      studentId: USERS.fernanda.id,
+      amount: 50,
+      type: "activity",
+      relatedActivityId: a5,
+      createdBy: USERS.marcelo.id,
+      createdAt: "10/03/2026, 12:00:00",
+    })
+  })
+
+  it("completion: alunos ativos × atividades ativas, com filtros de turma/matéria/professor", async () => {
+    const todas = await getReport<CompletionBodyRow[]>(coord, "/api/reports/completion")
+    expect(todas).toEqual([
+      { className: "1º Ano A", course: "Técnico em Administração", students: 3, activities: 3, possible: 9, done: 3, pct: 33 },
+      { className: "2º Ano A", course: "Técnico em Administração", students: 2, activities: 2, possible: 4, done: 2, pct: 50 },
+      { className: "3º Ano A", course: "Técnico em Administração", students: 1, activities: 1, possible: 1, done: 1, pct: 100 },
+    ])
+
+    const soC1 = await getReport<CompletionBodyRow[]>(coord, "/api/reports/completion?classId=c1")
+    expect(soC1.map((r) => r.className)).toEqual(["1º Ano A"])
+
+    // s2: c1 tem a1/a2 (2), c2 tem a3 (1), c3 tem a5 (1).
+    const matematica = await getReport<CompletionBodyRow[]>(coord, "/api/reports/completion?subjectId=s2")
+    expect(matematica.find((r) => r.className === "1º Ano A")?.activities).toBe(2)
+    expect(matematica.find((r) => r.className === "2º Ano A")?.activities).toBe(1)
+
+    // u7 só tem a4 (c2); professor continua restrito às próprias turmas.
+    const daSandra = await getReport<CompletionBodyRow[]>(coord, "/api/reports/completion?teacherId=u7")
+    expect(daSandra.find((r) => r.className === "2º Ano A")?.possible).toBe(2)
+    expect(daSandra.find((r) => r.className === "2º Ano A")?.done).toBe(1)
+    expect(daSandra.find((r) => r.className === "1º Ano A")?.activities).toBe(0)
+
+    const doMarcelo = await getReport<CompletionBodyRow[]>(marcelo, "/api/reports/completion?teacherId=u7")
+    expect(doMarcelo.map((r) => r.className)).toEqual(["1º Ano A", "2º Ano A"])
+    const foraDoEscopo = await getReport<CompletionBodyRow[]>(marcelo, "/api/reports/completion?classId=c3")
+    expect(foraDoEscopo).toEqual([])
+  })
+
+  it("completion: período é sobre submittedAt e inclui as duas pontas", async () => {
+    const dia10 = await getReport<CompletionBodyRow[]>(coord, "/api/reports/completion?from=2026-03-10&to=2026-03-10")
+    expect(dia10.find((r) => r.className === "1º Ano A")?.done).toBe(1)
+    expect(dia10.find((r) => r.className === "2º Ano A")?.done).toBe(1)
+    expect(dia10.find((r) => r.className === "3º Ano A")?.done).toBe(1)
+
+    // to=11 inclui a entrega de a6 em 11/03 (limite superior inclusivo).
+    const ate11 = await getReport<CompletionBodyRow[]>(coord, "/api/reports/completion?from=2026-03-10&to=2026-03-11")
+    expect(ate11.find((r) => r.className === "1º Ano A")?.done).toBe(2)
+    // A de 20/03 (a2) continua fora.
+    expect(ate11.find((r) => r.className === "1º Ano A")?.pct).toBe(22)
+
+    // Data inexistente é ignorada em vez de esvaziar o relatório.
+    const invalida = await getReport<CompletionBodyRow[]>(
+      coord,
+      "/api/reports/completion?from=2026-02-31&to=2026-03-11",
+    )
+    expect(invalida.find((r) => r.className === "1º Ano A")?.done).toBe(2)
+  })
+
+  it("points: filtros de período, turma, matéria e professor", async () => {
+    const todas = await getReport<PointsBodyRow[]>(coord, "/api/reports/points")
+    expect(todas.find((r) => r.studentName === "Ana Luiza Ribeiro")?.balance).toBe(22)
+    expect(todas.find((r) => r.studentName === "Beatriz Souza")?.balance).toBe(25)
+
+    // Período 10–10: só as transações do dia; o bônus de 10/03 entra.
+    const dia10 = await getReport<PointsBodyRow[]>(
+      coord,
+      "/api/reports/points?from=2026-03-10&to=2026-03-10",
+    )
+    expect(dia10.find((r) => r.studentName === "Ana Luiza Ribeiro")?.balance).toBe(15)
+    expect(dia10.find((r) => r.studentName === "Beatriz Souza")?.balance).toBe(0)
+    expect(dia10.find((r) => r.studentName === "Ricardo Lima")?.balance).toBe(40)
+
+    // Turma: só o roster da c1, com o nome da turma filtrada.
+    const c1 = await getReport<PointsBodyRow[]>(coord, "/api/reports/points?classId=c1")
+    expect(c1.map((r) => r.studentName).sort()).toEqual([
+      "Ana Luiza Ribeiro",
+      "Clara Nunes",
+      "Mateus Oliveira",
+    ])
+    expect(c1.every((r) => r.className === "1º Ano A")).toBe(true)
+
+    // Matéria: só transações de atividades de s2; o bônus da Ana (sem vínculo) sai.
+    const s2 = await getReport<PointsBodyRow[]>(coord, "/api/reports/points?subjectId=s2")
+    expect(s2.find((r) => r.studentName === "Ana Luiza Ribeiro")?.balance).toBe(17)
+    expect(s2.find((r) => r.studentName === "Ricardo Lima")?.balance).toBe(0)
+
+    // Professor: só a transação de a4 (Sandra).
+    const daSandra = await getReport<PointsBodyRow[]>(coord, "/api/reports/points?teacherId=u7")
+    expect(daSandra.find((r) => r.studentName === "Ricardo Lima")?.balance).toBe(40)
+    expect(daSandra.find((r) => r.studentName === "Ana Luiza Ribeiro")?.balance).toBe(0)
+
+    // Professor NÃO amplia o escopo via query: o roster dele é c1+c2, então a
+    // Fernanda (c3) não aparece e o classId fora do escopo devolve vazio.
+    const doMarcelo = await getReport<PointsBodyRow[]>(marcelo, "/api/reports/points?teacherId=u7")
+    expect(doMarcelo.map((r) => r.studentName)).not.toContain("Fernanda Costa")
+    expect(await getReport<PointsBodyRow[]>(marcelo, "/api/reports/points?classId=c3")).toEqual([])
+  })
+
+  it("activities-by-type: filtros e período sobre createdAt, com limite superior inclusivo", async () => {
+    const todas = await getReport<ActivitiesByTypeBodyRow[]>(coord, "/api/reports/activities-by-type")
+    expect(todas).toEqual([
+      { type: "academic", label: "Pedagógica", count: 6 },
+      { type: "school_action", label: "Ação Escolar", count: 1 },
+    ])
+
+    // 10–11/03: a1, a3, a5 e o rascunho (11/03) são acadêmicas; a6 é ação escolar.
+    const periodo = await getReport<ActivitiesByTypeBodyRow[]>(
+      coord,
+      "/api/reports/activities-by-type?from=2026-03-10&to=2026-03-11",
+    )
+    expect(periodo).toEqual([
+      { type: "academic", label: "Pedagógica", count: 4 },
+      { type: "school_action", label: "Ação Escolar", count: 1 },
+    ])
+
+    const c1 = await getReport<ActivitiesByTypeBodyRow[]>(
+      coord,
+      "/api/reports/activities-by-type?classId=c1&from=2026-03-10&to=2026-03-11",
+    )
+    expect(c1).toEqual([
+      { type: "academic", label: "Pedagógica", count: 2 },
+      { type: "school_action", label: "Ação Escolar", count: 1 },
+    ])
+
+    const s2 = await getReport<ActivitiesByTypeBodyRow[]>(
+      coord,
+      "/api/reports/activities-by-type?subjectId=s2&from=2026-03-10&to=2026-03-11",
+    )
+    expect(s2).toEqual([{ type: "academic", label: "Pedagógica", count: 4 }])
+
+    const daSandra = await getReport<ActivitiesByTypeBodyRow[]>(coord, "/api/reports/activities-by-type?teacherId=u7")
+    expect(daSandra).toEqual([{ type: "academic", label: "Pedagógica", count: 1 }])
+  })
+
+  it("activity-detail: contagens de RN03, atraso, donePct e teacherName", async () => {
+    const linhas = await getReport<ActivityDetailBodyRow[]>(coord, "/api/reports/activity-detail")
+    // Só atividades ativas (o rascunho sai) e ordenadas por prazo.
+    expect(linhas.map((r) => r.activityId)).toEqual([a3, a1, a2, a4, a5, a6])
+
+    const linhaA1 = linhas.find((r) => r.activityId === a1)
+    expect(linhaA1).toEqual({
+      activityId: a1,
+      title: "Matemática c1",
+      type: "academic",
+      subject: "Matemática",
+      className: "1º Ano A",
+      teacherName: "Prof. Marcelo Ferreira",
+      deadline: "10/09/2026",
+      createdAt: "10/03/2026, 08:00:00",
+      deliveries: 3,
+      approved: 1,
+      rejected: 1,
+      pending: 1,
+      late: 1,
+      donePct: 33,
+    })
+
+    // A Sandra: o nome vem do JOIN com users.
+    expect(linhas.find((r) => r.activityId === a4)?.teacherName).toBe("Prof. Sandra Alves")
+
+    // Período 10–10: só a entrega da Ana em a1; a reprovada (11/03) e a
+    // pendente (12/03) ficam de fora.
+    const dia10 = await getReport<ActivityDetailBodyRow[]>(
+      coord,
+      "/api/reports/activity-detail?from=2026-03-10&to=2026-03-10",
+    )
+    expect(dia10.find((r) => r.activityId === a1)).toMatchObject({
+      deliveries: 1,
+      approved: 1,
+      rejected: 0,
+      pending: 0,
+      late: 0,
+      donePct: 100,
+    })
+    expect(dia10.find((r) => r.activityId === a6)?.deliveries).toBe(0)
+
+    // to=11 inclui a reprovada (limite superior inclusivo).
+    const ate11 = await getReport<ActivityDetailBodyRow[]>(
+      coord,
+      "/api/reports/activity-detail?from=2026-03-10&to=2026-03-11",
+    )
+    expect(ate11.find((r) => r.activityId === a1)).toMatchObject({
+      deliveries: 2,
+      approved: 1,
+      rejected: 1,
+      pending: 0,
+      late: 0,
+      donePct: 50,
+    })
+    expect(ate11.find((r) => r.activityId === a6)?.deliveries).toBe(1)
+  })
+
+  it("activity-detail: filtros de turma, matéria e professor", async () => {
+    const c2 = await getReport<ActivityDetailBodyRow[]>(coord, "/api/reports/activity-detail?classId=c2")
+    expect(c2.map((r) => r.activityId)).toEqual([a3, a4])
+
+    const portugues = await getReport<ActivityDetailBodyRow[]>(coord, "/api/reports/activity-detail?subjectId=s1")
+    expect(portugues.map((r) => r.activityId)).toEqual([a4, a6])
+
+    const daSandra = await getReport<ActivityDetailBodyRow[]>(coord, "/api/reports/activity-detail?teacherId=u7")
+    expect(daSandra.map((r) => r.activityId)).toEqual([a4])
+  })
+
+  it("rankings/classes: escopo, ordenação, filtros e período", async () => {
+    const grupos = await getReport<ClassRankingBodyGroup[]>(coord, "/api/reports/rankings/classes")
+    expect(grupos.map((g) => g.className)).toEqual(["1º Ano A", "2º Ano A", "3º Ano A"])
+    expect(grupos[0].rows).toEqual([
+      { studentName: "Ana Luiza Ribeiro", points: 22, level: levelLabel(22) },
+      { studentName: "Mateus Oliveira", points: 20, level: levelLabel(20) },
+      { studentName: "Clara Nunes", points: 0, level: levelLabel(0) },
+    ])
+    expect(grupos[1].rows).toEqual([
+      { studentName: "Ricardo Lima", points: 40, level: levelLabel(40) },
+      { studentName: "Beatriz Souza", points: 25, level: levelLabel(25) },
+    ])
+    expect(grupos[2].rows).toEqual([
+      { studentName: "Fernanda Costa", points: 50, level: levelLabel(50) },
+    ])
+
+    // Período 10–10: a transação de 15/03 da Beatriz sai; o bônus de 10/03 entra
+    // no saldo sem filtro de matéria/professor.
+    const dia10 = await getReport<ClassRankingBodyGroup[]>(
+      coord,
+      "/api/reports/rankings/classes?from=2026-03-10&to=2026-03-10",
+    )
+    expect(dia10[0].rows).toEqual([
+      { studentName: "Mateus Oliveira", points: 20, level: levelLabel(20) },
+      { studentName: "Ana Luiza Ribeiro", points: 15, level: levelLabel(15) },
+      { studentName: "Clara Nunes", points: 0, level: levelLabel(0) },
+    ])
+    expect(dia10[1].rows.find((r) => r.studentName === "Beatriz Souza")?.points).toBe(0)
+
+    // Limite superior inclusivo: 15/03 entra quando to=15.
+    const ate15 = await getReport<ClassRankingBodyGroup[]>(
+      coord,
+      "/api/reports/rankings/classes?from=2026-03-10&to=2026-03-15",
+    )
+    expect(ate15[1].rows.find((r) => r.studentName === "Beatriz Souza")?.points).toBe(25)
+
+    // subjectId=s2: só transações de atividades da matéria; o bônus da Ana sai.
+    const matematica = await getReport<ClassRankingBodyGroup[]>(
+      coord,
+      "/api/reports/rankings/classes?subjectId=s2",
+    )
+    expect(matematica[0].rows).toEqual([
+      { studentName: "Mateus Oliveira", points: 20, level: levelLabel(20) },
+      { studentName: "Ana Luiza Ribeiro", points: 17, level: levelLabel(17) },
+      { studentName: "Clara Nunes", points: 0, level: levelLabel(0) },
+    ])
+    expect(matematica[1].rows).toEqual([
+      { studentName: "Beatriz Souza", points: 30, level: levelLabel(30) },
+      { studentName: "Ricardo Lima", points: 0, level: levelLabel(0) },
+    ])
+
+    // teacherId=u7: só a transação de a4 (Português, c2).
+    const daSandra = await getReport<ClassRankingBodyGroup[]>(
+      coord,
+      "/api/reports/rankings/classes?teacherId=u7",
+    )
+    expect(daSandra[1].rows).toEqual([
+      { studentName: "Ricardo Lima", points: 40, level: levelLabel(40) },
+      { studentName: "Beatriz Souza", points: 0, level: levelLabel(0) },
+    ])
+    expect(daSandra[0].rows.every((r) => r.points === 0)).toBe(true)
+
+    const soC3 = await getReport<ClassRankingBodyGroup[]>(coord, "/api/reports/rankings/classes?classId=c3")
+    expect(soC3.map((g) => g.className)).toEqual(["3º Ano A"])
+  })
+
+  it("rankings/subjects: escopo, ordenação, filtros e período", async () => {
+    const grupos = await getReport<SubjectRankingBodyGroup[]>(coord, "/api/reports/rankings/subjects")
+    expect(grupos.map((g) => g.subjectId)).toEqual(["s1", "s2"])
+    expect(grupos[0].subjectName).toBe("Língua Portuguesa")
+    expect(grupos[0].rows).toEqual([
+      { studentName: "Ricardo Lima", className: "2º Ano A", points: 40, level: levelLabel(40) },
+    ])
+    expect(grupos[1].rows).toEqual([
+      { studentName: "Fernanda Costa", className: "3º Ano A", points: 50, level: levelLabel(50) },
+      { studentName: "Beatriz Souza", className: "2º Ano A", points: 30, level: levelLabel(30) },
+      { studentName: "Mateus Oliveira", className: "1º Ano A", points: 20, level: levelLabel(20) },
+      { studentName: "Ana Luiza Ribeiro", className: "1º Ano A", points: 17, level: levelLabel(17) },
+    ])
+
+    const soS2 = await getReport<SubjectRankingBodyGroup[]>(coord, "/api/reports/rankings/subjects?subjectId=s2")
+    expect(soS2.map((g) => g.subjectId)).toEqual(["s2"])
+
+    const c1 = await getReport<SubjectRankingBodyGroup[]>(coord, "/api/reports/rankings/subjects?classId=c1")
+    expect(c1.map((g) => g.subjectId)).toEqual(["s2"])
+    expect(c1[0].rows).toEqual([
+      { studentName: "Mateus Oliveira", className: "1º Ano A", points: 20, level: levelLabel(20) },
+      { studentName: "Ana Luiza Ribeiro", className: "1º Ano A", points: 17, level: levelLabel(17) },
+    ])
+
+    const daSandra = await getReport<SubjectRankingBodyGroup[]>(
+      coord,
+      "/api/reports/rankings/subjects?teacherId=u7",
+    )
+    expect(daSandra.map((g) => g.subjectId)).toEqual(["s1"])
+    expect(daSandra[0].rows[0].studentName).toBe("Ricardo Lima")
+
+    // Período 10–10: a transação de 15/03 da Beatriz fica de fora.
+    const dia10 = await getReport<SubjectRankingBodyGroup[]>(
+      coord,
+      "/api/reports/rankings/subjects?from=2026-03-10&to=2026-03-10",
+    )
+    expect(dia10[0].rows).toEqual([
+      { studentName: "Ricardo Lima", className: "2º Ano A", points: 40, level: levelLabel(40) },
+    ])
+    expect(dia10[1].rows).toEqual([
+      { studentName: "Fernanda Costa", className: "3º Ano A", points: 50, level: levelLabel(50) },
+      { studentName: "Mateus Oliveira", className: "1º Ano A", points: 20, level: levelLabel(20) },
+      { studentName: "Ana Luiza Ribeiro", className: "1º Ano A", points: 10, level: levelLabel(10) },
+    ])
+
+    // Limite superior inclusivo: 15/03 entra quando to=15.
+    const ate15 = await getReport<SubjectRankingBodyGroup[]>(
+      coord,
+      "/api/reports/rankings/subjects?from=2026-03-10&to=2026-03-15",
+    )
+    expect(ate15[1].rows.find((r) => r.studentName === "Beatriz Souza")?.points).toBe(30)
+  })
+
+  it("CSV dos relatórios: BOM, separador ;, cabeçalho e nome do arquivo", async () => {
+    const casos: Array<{ path: string; header: string; filename: string; contem: string }> = [
+      {
+        path: "/api/reports/completion?format=csv&classId=c1",
+        header: "Turma;Curso;Alunos;Atividades;Possíveis;Concluídas;%",
+        filename: "relatorio-conclusao.csv",
+        contem: "1º Ano A",
+      },
+      {
+        path: "/api/reports/activities-by-type?format=csv&teacherId=u7",
+        header: "Tipo;Quantidade",
+        filename: "relatorio-atividades-tipo.csv",
+        contem: "Pedagógica;1",
+      },
+      {
+        path: "/api/reports/activity-detail?format=csv&classId=c1",
+        header:
+          "Atividade;Tipo;Matéria;Turma;Professor;Prazo;Entregas;Aprovadas;Reprovadas;Pendentes;Atrasadas;%",
+        filename: "relatorio-atividades.csv",
+        contem: "Matemática c1",
+      },
+      {
+        path: "/api/reports/rankings/classes?format=csv&classId=c1",
+        header: "Turma;Curso;Aluno;Pontos;Nível",
+        filename: "relatorio-ranking-turmas.csv",
+        contem: "Ana Luiza Ribeiro",
+      },
+      {
+        path: "/api/reports/rankings/subjects?format=csv&subjectId=s2",
+        header: "Matéria;Aluno;Turma;Pontos;Nível",
+        filename: "relatorio-ranking-materias.csv",
+        contem: "Fernanda Costa",
+      },
+    ]
+
+    for (const caso of casos) {
+      const res = await coord.get(caso.path)
+      expect(res.status, `CSV ${caso.path} falhou`).toBe(200)
+      expect(res.text.charCodeAt(0), `BOM ausente em ${caso.path}`).toBe(0xfeff)
+      expect(res.text, `cabeçalho ausente em ${caso.path}`).toContain(caso.header)
+      expect(res.text, `conteúdo ausente em ${caso.path}`).toContain(caso.contem)
+      expect(res.headers["content-disposition"]).toContain(caso.filename)
+    }
+  })
+
+  it("rotas novas são exclusivas da coordenação; professor e aluno recebem 403", async () => {
+    const rotas = [
+      "/api/reports/activity-detail",
+      "/api/reports/rankings/classes",
+      "/api/reports/rankings/subjects",
+    ]
+    for (const rota of rotas) {
+      expect((await marcelo.get(rota)).status, `professor em ${rota}`).toBe(403)
+      expect((await ana.get(rota)).status, `aluno em ${rota}`).toBe(403)
+      expect((await coord.get(rota)).status, `coordenação em ${rota}`).toBe(200)
+    }
   })
 })
