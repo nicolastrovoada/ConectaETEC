@@ -6,6 +6,7 @@ import type {
   ClassRankingGroup,
   CompletionReportRow,
   SubjectRankingGroup,
+  TeacherSummaryRow,
 } from "../../lib/types"
 import { api, buildQuery, downloadFile } from "../../lib/api"
 import { useAsync } from "../../hooks/useAsync"
@@ -55,6 +56,11 @@ export function CoordinatorReportsView() {
   const [draft, setDraft] = useState<ReportFilters>(EMPTY_FILTERS)
   const [applied, setApplied] = useState<ReportFilters>(EMPTY_FILTERS)
 
+  // CSV usa `applied`; se o formulário mostra outro recorte, exportar daria um
+  // arquivo diferente do que está na tela. Enquanto `dirty`, os botões ficam
+  // desabilitados até "Aplicar filtros".
+  const dirty = JSON.stringify(draft) !== JSON.stringify(applied)
+
   const classes = useAsync<Class[]>(useCallback(() => api.get<Class[]>("/api/classes"), []), [])
   const subjects = useAsync<Subject[]>(useCallback(() => api.get<Subject[]>("/api/subjects"), []), [])
   const teachers = useAsync<SafeUser[]>(
@@ -72,6 +78,10 @@ export function CoordinatorReportsView() {
   )
   const activityDetail = useAsync<ActivityDetailReportRow[]>(
     () => api.get<ActivityDetailReportRow[]>("/api/reports/activity-detail", filterQuery(applied)),
+    [applied],
+  )
+  const teacherSummary = useAsync<TeacherSummaryRow[]>(
+    () => api.get<TeacherSummaryRow[]>("/api/reports/teacher-summary", filterQuery(applied)),
     [applied],
   )
   const classRanking = useAsync<ClassRankingGroup[]>(
@@ -195,9 +205,16 @@ export function CoordinatorReportsView() {
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-xs text-gray-500 dark:text-slate-400">
-              Os filtros valem para todos os relatórios e para as exportações CSV.
-            </p>
+            <div className="space-y-1">
+              <p className="text-xs text-gray-500 dark:text-slate-400">
+                Os filtros valem para todos os relatórios e para as exportações CSV.
+              </p>
+              {dirty && (
+                <p className="text-xs font-semibold text-amber-700 dark:text-amber-300" role="status">
+                  Aplique os filtros para exportar os relatórios em CSV.
+                </p>
+              )}
+            </div>
             <div className="flex items-center gap-2">
               <Button type="submit" className="bg-orange-700 hover:bg-orange-800">
                 Aplicar filtros
@@ -225,6 +242,7 @@ export function CoordinatorReportsView() {
           description="Entregas concluídas em relação ao total possível de cada turma."
           className="mb-0"
           onExport={() => void handleDownload("/api/reports/completion", "Relatório de conclusão")}
+          exportDisabled={dirty}
         >
           {completion.loading && <LoadingBlock rows={2} label="Carregando conclusão por turma" />}
           {!completion.loading && completion.error && <ErrorState message={completion.error} onRetry={completion.reload} />}
@@ -257,9 +275,10 @@ export function CoordinatorReportsView() {
 
         <ReportSection
           title="Atividades por tipo"
-          description="Distribuição das atividades publicadas pelos tipos do projeto."
+          description="Distribuição das atividades cadastradas pelos tipos do projeto."
           className="mb-0"
           onExport={() => void handleDownload("/api/reports/activities-by-type", "Relatório por tipo")}
+          exportDisabled={dirty}
         >
           {byType.loading && <LoadingBlock rows={2} label="Carregando atividades por tipo" />}
           {!byType.loading && byType.error && <ErrorState message={byType.error} onRetry={byType.reload} />}
@@ -294,6 +313,7 @@ export function CoordinatorReportsView() {
           title="Atrasos por atividade"
           description="Entregas, aprovações, pendências e atrasos de cada atividade no recorte."
           onExport={() => void handleDownload("/api/reports/activity-detail", "Relatório de atrasos por atividade")}
+          exportDisabled={dirty}
         >
           {activityDetail.loading && <LoadingBlock rows={3} label="Carregando atrasos por atividade" />}
           {!activityDetail.loading && activityDetail.error && (
@@ -322,7 +342,7 @@ export function CoordinatorReportsView() {
                       <th scope="col" className="px-4 py-3 font-semibold text-right">Aprovadas</th>
                       <th scope="col" className="px-4 py-3 font-semibold text-right">Pendentes</th>
                       <th scope="col" className="px-4 py-3 font-semibold text-right">Atrasadas</th>
-                      <th scope="col" className="px-4 py-3 font-semibold text-right">%</th>
+                      <th scope="col" className="px-4 py-3 font-semibold text-right">Aprovação</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -377,9 +397,66 @@ export function CoordinatorReportsView() {
       </div>
 
       <ReportSection
+        title="Conclusão e atraso por professor"
+        description="Atividades, entregas, aprovações e atrasos agregados por professor."
+        onExport={() => void handleDownload("/api/reports/teacher-summary", "Resumo por professor")}
+        exportDisabled={dirty}
+      >
+        {teacherSummary.loading && <LoadingBlock rows={3} label="Carregando resumo por professor" />}
+        {!teacherSummary.loading && teacherSummary.error && (
+          <ErrorState message={teacherSummary.error} onRetry={teacherSummary.reload} />
+        )}
+        {!teacherSummary.loading && !teacherSummary.error && (teacherSummary.data ?? []).length === 0 && (
+          <Card>
+            <EmptyState
+              icon="👩‍🏫"
+              title="Nenhum professor no recorte"
+              description="Ajuste ou limpe os filtros para ver a conclusão e o atraso por professor."
+            />
+          </Card>
+        )}
+        {!teacherSummary.loading && !teacherSummary.error && (teacherSummary.data ?? []).length > 0 && (
+          <Card className="overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm" aria-label="Conclusão e atraso por professor">
+                <thead>
+                  <tr className="text-left text-xs uppercase tracking-wide text-gray-500 dark:text-slate-400 border-b border-gray-100 dark:border-slate-800">
+                    <th scope="col" className="px-4 py-3 font-semibold">Professor</th>
+                    <th scope="col" className="px-4 py-3 font-semibold text-right">Atividades</th>
+                    <th scope="col" className="px-4 py-3 font-semibold text-right">Entregas</th>
+                    <th scope="col" className="px-4 py-3 font-semibold text-right">Aprovadas</th>
+                    <th scope="col" className="px-4 py-3 font-semibold text-right">Atrasadas</th>
+                    <th scope="col" className="px-4 py-3 font-semibold text-right">Aprovação %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {teacherSummary.data?.map((row) => (
+                    <tr
+                      key={row.teacherName}
+                      className="border-b border-gray-50 dark:border-slate-800/60 last:border-0 hover:bg-gray-50 dark:hover:bg-slate-800/40 transition-colors"
+                    >
+                      <th scope="row" className="px-4 py-3 text-left font-semibold text-gray-800 dark:text-slate-200">
+                        {row.teacherName}
+                      </th>
+                      <td className="px-4 py-3 text-right tabular-nums text-gray-800 dark:text-slate-200">{row.activities}</td>
+                      <td className="px-4 py-3 text-right tabular-nums text-gray-800 dark:text-slate-200">{row.deliveries}</td>
+                      <td className="px-4 py-3 text-right tabular-nums text-green-700 dark:text-green-400">{row.approved}</td>
+                      <td className="px-4 py-3 text-right tabular-nums text-amber-700 dark:text-amber-300">{row.late}</td>
+                      <td className="px-4 py-3 text-right font-black tabular-nums text-orange-600 dark:text-orange-400">{row.approvalPct}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+      </ReportSection>
+
+      <ReportSection
         title="Ranking por turma"
         description="Pontos e nível de cada aluno, agrupados pela turma."
         onExport={() => void handleDownload("/api/reports/rankings/classes", "Ranking por turma")}
+        exportDisabled={dirty}
       >
         {classRanking.loading && <LoadingBlock rows={3} label="Carregando ranking por turma" />}
         {!classRanking.loading && classRanking.error && <ErrorState message={classRanking.error} onRetry={classRanking.reload} />}
@@ -444,6 +521,7 @@ export function CoordinatorReportsView() {
         title="Ranking por matéria"
         description="Pontos e nível dos alunos em cada matéria."
         onExport={() => void handleDownload("/api/reports/rankings/subjects", "Ranking por matéria")}
+        exportDisabled={dirty}
       >
         {subjectRanking.loading && <LoadingBlock rows={3} label="Carregando ranking por matéria" />}
         {!subjectRanking.loading && subjectRanking.error && (
@@ -521,10 +599,19 @@ interface ReportSectionProps {
   description?: string
   className?: string
   onExport: () => void
+  /** Desabilita o CSV enquanto o formulário mostra filtros ainda não aplicados. */
+  exportDisabled?: boolean
   children: ReactNode
 }
 
-function ReportSection({ title, description, className = "mb-8", onExport, children }: ReportSectionProps) {
+function ReportSection({
+  title,
+  description,
+  className = "mb-8",
+  onExport,
+  exportDisabled = false,
+  children,
+}: ReportSectionProps) {
   return (
     <section aria-label={title} className={className}>
       <div className="flex items-start justify-between gap-3 mb-3">
@@ -538,6 +625,8 @@ function ReportSection({ title, description, className = "mb-8", onExport, child
           variant="secondary"
           className="text-xs px-3 py-1.5 whitespace-nowrap"
           onClick={onExport}
+          disabled={exportDisabled}
+          title={exportDisabled ? "Aplique os filtros para exportar" : undefined}
           aria-label={`Exportar CSV — ${title}`}
         >
           <span aria-hidden="true">⬇️</span> CSV

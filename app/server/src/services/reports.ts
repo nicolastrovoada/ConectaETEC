@@ -4,8 +4,8 @@ import { mapClass, mapUser, type ClassRow, type UserRow } from "../db/rows"
 import { isValidBRDate, startOfToday } from "../lib/dates"
 import { getBalance } from "./points"
 import { currentStreakDays } from "./streak"
-import { levelLabel } from "../shared/types"
-import type { Role } from "../shared/types"
+import { ACTIVITY_TYPE_LABELS, levelLabel } from "../shared/types"
+import type { ActivityType, Role } from "../shared/types"
 
 /**
  * Filtros comuns aos relatórios da coordenação (Task 4.5).
@@ -142,7 +142,8 @@ function isTeacherOrCoordinator(role: Role): boolean {
  * - `possible` = alunos ATIVOS das turmas no escopo × atividades ativas/não
  *   excluídas no escopo;
  * - `done` = entregas `approved` com `submittedAt` dentro do período (sem
- *   período, todas as aprovadas);
+ *   período, todas as aprovadas), contadas apenas para alunos que continuam no
+ *   roster ATIVO da turma — o mesmo recorte de `possible`;
  * - `teacherId` NÃO amplia o escopo do professor: o conjunto de turmas dele é
  *   decidido por `class.teacherIds` antes de qualquer filtro de atividade.
  */
@@ -151,6 +152,12 @@ export function completionReport(
   filters: ReportFilters = {},
 ): CompletionRow[] {
   if (!isTeacherOrCoordinator(caller.role)) return []
+  // Escopo do professor é por TURMA (`class.teacherIds`), nunca por autoria:
+  // `teacherId` na query não pode virar uma janela para os agregados de outro
+  // professor nas turmas compartilhadas. Ignorar (em vez de forçar o próprio
+  // id) preserva o comportamento padrão de "todas as atividades das minhas
+  // turmas"; a coordenação continua usando `teacherId` como recorte.
+  if (caller.role === "teacher") filters = { ...filters, teacherId: undefined }
   const db = getDb()
   const classRows = db
     .prepare("SELECT * FROM classes ORDER BY name COLLATE NOCASE ASC")
@@ -209,21 +216,35 @@ export function completionReport(
   pushPeriodFilters(doneWhere, doneParams, filters, "s.submittedAt")
   const doneRows = db
     .prepare(
-      `SELECT a.classId AS classId, COUNT(*) AS total
+      `SELECT a.classId AS classId, s.studentId AS studentId, COUNT(*) AS total
        FROM submissions s
        JOIN activities a ON a.id = s.activityId
        WHERE ${doneWhere.join(" AND ")}
-       GROUP BY a.classId`,
+       GROUP BY a.classId, s.studentId`,
     )
-    .all(...doneParams) as unknown as Array<{ classId: string; total: number }>
-  const doneByClass = new Map(doneRows.map((r) => [r.classId, Number(r.total)]))
+    .all(...doneParams) as unknown as Array<{ classId: string; studentId: string; total: number }>
+  // Roster ATIVO por turma — o MESMO recorte de `possible` (`activeStudents`).
+  // `done` é somado por (turma, aluno) e só para quem ainda está no roster: um
+  // aluno aprovado que depois saiu da turma ou foi desativado não pode seguir
+  // contando enquanto `possible` deixa de contá-lo. Sem isso `done` excede
+  // `possible` e `pct` passa de 100%.
+  const activeRosterByClass = new Map(
+    classes.map((c) => [c.id, new Set([...new Set(c.studentIds)].filter((id) => activeStudents.has(id)))]),
+  )
+  const doneByClass = new Map<string, number>()
+  for (const row of doneRows) {
+    if (!activeRosterByClass.get(row.classId)?.has(row.studentId)) continue
+    doneByClass.set(row.classId, (doneByClass.get(row.classId) ?? 0) + Number(row.total))
+  }
 
   return classes.map((c) => {
-    const students = [...new Set(c.studentIds)].filter((id) => activeStudents.has(id)).length
+    const students = activeRosterByClass.get(c.id)?.size ?? 0
     const activities = activitiesByClass.get(c.id) ?? 0
     const possible = students * activities
     const done = doneByClass.get(c.id) ?? 0
-    const pct = possible === 0 ? 0 : Math.round((done / possible) * 100)
+    // Clamp de segurança: com o roster restrito `done <= possible`; o teto
+    // garante que nenhuma inconsistência futura renderize mais de 100%.
+    const pct = possible === 0 ? 0 : Math.min(100, Math.round((done / possible) * 100))
     return { className: c.name, course: c.course, students, activities, possible, done, pct }
   })
 }
@@ -246,6 +267,9 @@ export function pointsReport(
   filters: ReportFilters = {},
 ): PointsByStudentRow[] {
   if (!isTeacherOrCoordinator(caller.role)) return []
+  // Mesmo motivo de `completionReport`: o recorte do professor é a TURMA dele,
+  // e `teacherId` de terceiro é ignorado para não expor agregados alheios.
+  if (caller.role === "teacher") filters = { ...filters, teacherId: undefined }
   const db = getDb()
   const userRows = db
     .prepare("SELECT * FROM users WHERE role = 'student' AND active = 1")
@@ -280,7 +304,13 @@ export function pointsReport(
       const balance = points.get(s.id) ?? 0
       return { studentName: s.name, className, balance, level: levelLabel(balance) }
     })
-    .sort((a, b) => b.balance - a.balance)
+    // Desempate por nome: sem ele, empates de saldo dependem da ordem física
+    // do banco e a lista "muda" entre execuções sem nenhum dado novo.
+    .sort(
+      (a, b) =>
+        b.balance - a.balance ||
+        a.studentName.localeCompare(b.studentName, "pt-BR", { sensitivity: "base" }),
+    )
 }
 
 /**
@@ -307,15 +337,13 @@ export function activitiesByTypeReport(filters: ReportFilters = {}): ActivitiesB
        ORDER BY a.type`,
     )
     .all(...params) as unknown as Array<{ type: string; count: number }>
-  const labels: Record<string, string> = {
-    academic: "Pedagógica",
-    school_action: "Ação Escolar",
-    event: "Evento",
-    library: "Biblioteca",
-    support: "Suporte",
-    other: "Outro",
-  }
-  return rows.map((r) => ({ type: r.type, label: labels[r.type] ?? r.type, count: Number(r.count) }))
+  // Rótulo único do domínio (`shared/types`): um mapa local aqui já divergiu
+  // uma vez do que a UI exibe.
+  return rows.map((r) => ({
+    type: r.type,
+    label: ACTIVITY_TYPE_LABELS[r.type as ActivityType] ?? r.type,
+    count: Number(r.count),
+  }))
 }
 
 /** Uma atividade do professor com as contagens de entrega (Task 4.2). */
@@ -668,6 +696,44 @@ export function activityDetailReport(filters: ReportFilters = {}): ActivityDetai
   })
 }
 
+/** Uma linha do resumo por professor (conclusão e atraso agregados). */
+export interface TeacherSummaryRow {
+  teacherName: string
+  activities: number
+  deliveries: number
+  approved: number
+  late: number
+  /** `Math.round(approved / deliveries * 100)`; 0 quando não há entrega. */
+  approvalPct: number
+}
+
+/**
+ * `GET /api/reports/teacher-summary` (4.5) — conclusão e atraso POR PROFESSOR.
+ *
+ * Reutiliza `activityDetailReport` (mesmos filtros, mesmo período e mesmo
+ * recorte de atividade ativa/não excluída) e agrega em memória por
+ * `teacherName`. Não há SQL próprio de propósito: duplicar o WHERE faria os
+ * dois relatórios divergirem com o tempo. Ordenação por nome em pt-BR.
+ */
+export function teacherSummaryReport(filters: ReportFilters = {}): TeacherSummaryRow[] {
+  const byTeacher = new Map<string, Omit<TeacherSummaryRow, "teacherName" | "approvalPct">>()
+  for (const row of activityDetailReport(filters)) {
+    const acc = byTeacher.get(row.teacherName) ?? { activities: 0, deliveries: 0, approved: 0, late: 0 }
+    acc.activities += 1
+    acc.deliveries += row.deliveries
+    acc.approved += row.approved
+    acc.late += row.late
+    byTeacher.set(row.teacherName, acc)
+  }
+  return [...byTeacher.entries()]
+    .map(([teacherName, acc]) => ({
+      teacherName,
+      ...acc,
+      approvalPct: acc.deliveries === 0 ? 0 : Math.round((acc.approved / acc.deliveries) * 100),
+    }))
+    .sort((a, b) => a.teacherName.localeCompare(b.teacherName, "pt-BR", { sensitivity: "base" }))
+}
+
 export interface ClassRankingRow {
   studentName: string
   points: number
@@ -703,8 +769,11 @@ function pointsByStudent(
   const params: string[] = [...studentIds]
   const scopedToActivity = Boolean(filters.subjectId || filters.teacherId)
   if (scopedToActivity) {
+    // Decisão 3 do V3: pontos de atividade excluída PERMANECEM. O JOIN existe
+    // só para atribuir matéria/professor à transação — filtrar `deletedAt`
+    // aqui faria o saldo do recorte divergir de `getBalance` e do ranking por
+    // turma, que mantêm o ponto.
     joins.push("JOIN activities a ON a.id = t.relatedActivityId")
-    where.push("a.deletedAt IS NULL")
     if (filters.subjectId) {
       where.push("a.subjectId = ?")
       params.push(filters.subjectId)
@@ -807,7 +876,17 @@ interface SubjectRankingJoinRow {
  */
 export function subjectRankingsReport(filters: ReportFilters = {}): SubjectRankingGroup[] {
   const db = getDb()
-  const where = ["t.type = 'activity'", "t.relatedActivityId IS NOT NULL", "a.deletedAt IS NULL"]
+  // Atividade soft-deleted continua no JOIN (decisão 3: os pontos permanecem);
+  // o JOIN só serve para descobrir a matéria/professor da transação. Já o
+  // ranking é de pessoas: aluno inativo/não-aluno e turma inativa saem, em
+  // paridade com `classRankingsReport`.
+  const where = [
+    "t.type = 'activity'",
+    "t.relatedActivityId IS NOT NULL",
+    "u.active = 1",
+    "u.role = 'student'",
+    "cls.active = 1",
+  ]
   const params: string[] = []
   if (filters.classId) {
     where.push("a.classId = ?")

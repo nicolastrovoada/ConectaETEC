@@ -2,7 +2,7 @@
 // Mesma pilha dos demais testes de client: Testing Library + MSW sobre o wrapper
 // real `src/lib/api.ts`. O contrato fixado aqui é o da TELA: a primeira consulta
 // sai sem filtros; "Aplicar filtros" manda from/to/classId/subjectId/teacherId
-// para os cinco relatórios; os blocos novos desenham os valores do servidor; o
+// para os seis relatórios; os blocos novos desenham os valores do servidor; o
 // CSV de cada bloco novo leva os MESMOS filtros + format=csv; e "Limpar filtros"
 // volta ao estado inicial recarregando sem query.
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from "vitest"
@@ -17,6 +17,7 @@ import type {
   ClassRankingGroup,
   CompletionReportRow,
   SubjectRankingGroup,
+  TeacherSummaryRow,
 } from "../../lib/types"
 import { downloadFile } from "../../lib/api"
 import { CoordinatorReportsView } from "./CoordinatorReportsView"
@@ -36,6 +37,7 @@ const ROUTES = [
   "/api/reports/completion",
   "/api/reports/activities-by-type",
   "/api/reports/activity-detail",
+  "/api/reports/teacher-summary",
   "/api/reports/rankings/classes",
   "/api/reports/rankings/subjects",
 ] as const
@@ -110,7 +112,6 @@ const DETALHE: ActivityDetailReportRow[] = [
     className: "3º Info A",
     teacherName: "Marcelo Ferreira",
     deadline: "15/10/2026",
-    createdAt: "01/09/2026, 08:00:00",
     deliveries: 10,
     approved: 6,
     rejected: 2,
@@ -126,7 +127,6 @@ const DETALHE: ActivityDetailReportRow[] = [
     className: "2º Adm B",
     teacherName: "Ana Paula",
     deadline: "20/09/2026",
-    createdAt: "02/09/2026, 09:30:00",
     deliveries: 0,
     approved: 0,
     rejected: 0,
@@ -134,6 +134,11 @@ const DETALHE: ActivityDetailReportRow[] = [
     late: 0,
     donePct: 0,
   },
+]
+
+const RESUMO_PROFESSORES: TeacherSummaryRow[] = [
+  { teacherName: "Ana Paula", activities: 1, deliveries: 0, approved: 0, late: 0, approvalPct: 0 },
+  { teacherName: "Marcelo Ferreira", activities: 1, deliveries: 10, approved: 6, late: 3, approvalPct: 60 },
 ]
 
 const RANKING_TURMAS: ClassRankingGroup[] = [
@@ -197,6 +202,7 @@ beforeEach(() => {
     reportHandler("/api/reports/completion", CONCLUSAO),
     reportHandler("/api/reports/activities-by-type", POR_TIPO),
     reportHandler("/api/reports/activity-detail", DETALHE),
+    reportHandler("/api/reports/teacher-summary", RESUMO_PROFESSORES),
     reportHandler("/api/reports/rankings/classes", RANKING_TURMAS),
     reportHandler("/api/reports/rankings/subjects", RANKING_MATERIAS),
   )
@@ -255,11 +261,12 @@ function conferirSemFiltros(url: URL) {
 }
 
 describe("Coordenação — relatório completo (4.5)", () => {
-  it("a primeira consulta dos cinco relatórios sai sem filtros", async () => {
+  it("a primeira consulta dos seis relatórios sai sem filtros", async () => {
     renderView()
 
-    // Espera o conteúdo de cada bloco para garantir que as cinco rotas responderam.
+    // Espera o conteúdo de cada bloco para garantir que as seis rotas responderam.
     await screen.findByRole("table", { name: "Atrasos por atividade" })
+    await screen.findByRole("table", { name: "Conclusão e atraso por professor" })
     await screen.findByRole("table", { name: "Ranking de pontos — 3º Info A — Informática" })
     await screen.findByRole("table", { name: "Ranking por matéria — Matemática" })
     await screen.findByText("80%")
@@ -296,7 +303,7 @@ describe("Coordenação — relatório completo (4.5)", () => {
 
     const tabela = await screen.findByRole("table", { name: "Atrasos por atividade" })
     const cabecalhos = within(tabela).getAllByRole("columnheader").map((th) => th.textContent)
-    expect(cabecalhos).toEqual(["Atividade", "Professor", "Turma", "Matéria", "Entregas", "Aprovadas", "Pendentes", "Atrasadas", "%"])
+    expect(cabecalhos).toEqual(["Atividade", "Professor", "Turma", "Matéria", "Entregas", "Aprovadas", "Pendentes", "Atrasadas", "Aprovação"])
 
     const linha = within(tabela).getByRole("row", { name: /Lista de frações/ })
     expect(within(linha).getByRole("rowheader")).toHaveTextContent("Lista de frações")
@@ -366,6 +373,7 @@ describe("Coordenação — relatório completo (4.5)", () => {
 
     const blocos = [
       { botao: "Exportar CSV — Atrasos por atividade", rota: "/api/reports/activity-detail" },
+      { botao: "Exportar CSV — Conclusão e atraso por professor", rota: "/api/reports/teacher-summary" },
       { botao: "Exportar CSV — Ranking por turma", rota: "/api/reports/rankings/classes" },
       { botao: "Exportar CSV — Ranking por matéria", rota: "/api/reports/rankings/subjects" },
     ]
@@ -383,7 +391,7 @@ describe("Coordenação — relatório completo (4.5)", () => {
     }
   })
 
-  it("“Limpar filtros” restaura os campos e recarrega os cinco relatórios sem filtros", async () => {
+  it("“Limpar filtros” restaura os campos e recarrega os seis relatórios sem filtros", async () => {
     const user = userEvent.setup({ delay: null })
     renderView()
 
@@ -415,5 +423,66 @@ describe("Coordenação — relatório completo (4.5)", () => {
     // …e o aviso é local, sem ErrorState tomando conta do relatório inteiro.
     expect(await screen.findByText(/Algumas opções de filtro não puderam ser carregadas/)).toBeInTheDocument()
     expect(screen.queryByText("Não foi possível carregar os dados.")).not.toBeInTheDocument()
+  })
+
+  it("desenha a conclusão e o atraso por professor e exporta em CSV", async () => {
+    const user = userEvent.setup({ delay: null })
+    renderView()
+
+    const tabela = await screen.findByRole("table", { name: "Conclusão e atraso por professor" })
+    expect(within(tabela).getAllByRole("columnheader").map((th) => th.textContent)).toEqual([
+      "Professor",
+      "Atividades",
+      "Entregas",
+      "Aprovadas",
+      "Atrasadas",
+      "Aprovação %",
+    ])
+
+    const marcelo = within(tabela).getByRole("row", { name: /Marcelo Ferreira/ })
+    expect(within(marcelo).getByRole("rowheader")).toHaveTextContent("Marcelo Ferreira")
+    expect(within(marcelo).getAllByRole("cell").map((c) => c.textContent)).toEqual([
+      "1",
+      "10",
+      "6",
+      "3",
+      "60%",
+    ])
+
+    downloadMock.mockClear()
+    await user.click(
+      screen.getByRole("button", { name: "Exportar CSV — Conclusão e atraso por professor" }),
+    )
+    await waitFor(() => expect(downloadMock).toHaveBeenCalledTimes(1))
+    const url = new URL(downloadMock.mock.calls[0][0], "http://localhost")
+    expect(url.pathname).toBe("/api/reports/teacher-summary")
+    expect(url.searchParams.get("format")).toBe("csv")
+  })
+
+  it("desabilita todos os CSVs enquanto há filtro não aplicado", async () => {
+    const user = userEvent.setup({ delay: null })
+    renderView()
+    await screen.findByRole("table", { name: "Atrasos por atividade" })
+
+    const botoes = screen.getAllByRole("button", { name: /Exportar CSV/ })
+    expect(botoes).toHaveLength(6)
+    for (const botao of botoes) expect(botao).toBeEnabled()
+
+    fireEvent.change(screen.getByLabelText("De"), { target: { value: "2026-02-01" } })
+
+    expect(
+      await screen.findByText("Aplique os filtros para exportar os relatórios em CSV."),
+    ).toBeInTheDocument()
+    for (const botao of screen.getAllByRole("button", { name: /Exportar CSV/ })) {
+      expect(botao).toBeDisabled()
+      expect(botao).toHaveAttribute("title", "Aplique os filtros para exportar")
+    }
+
+    await user.click(screen.getByRole("button", { name: "Aplicar filtros" }))
+    await waitFor(() => {
+      for (const botao of screen.getAllByRole("button", { name: /Exportar CSV/ })) {
+        expect(botao).toBeEnabled()
+      }
+    })
   })
 })

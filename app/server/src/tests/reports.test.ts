@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeAll } from "vitest"
+import request from "supertest"
 import { makeApp, prepareDb, loginAgent, USERS, brDateInDays } from "./helpers"
 import type { Express } from "express"
 import { getDb } from "../db/connection"
 import { brDateInDays as brDateInDaysSP, startOfToday } from "../lib/dates"
 import { currentStreakDays } from "../services/streak"
 import { createActivity, createSubmission, createTransaction } from "./fixtures"
+import { toCsv } from "../services/reports"
 import { levelLabel } from "../shared/types"
 
 /**
@@ -638,6 +640,15 @@ interface SubjectRankingBodyGroup {
   rows: SubjectRankingBodyRow[]
 }
 
+interface TeacherSummaryBodyRow {
+  teacherName: string
+  activities: number
+  deliveries: number
+  approved: number
+  late: number
+  approvalPct: number
+}
+
 /** GET autenticado que exige 200 e devolve `body.data` tipado. */
 async function getReport<T>(agent: Agent, path: string): Promise<T> {
   const res = await agent.get(path)
@@ -903,8 +914,14 @@ describe("Relatórios completos da coordenação (Task 4.5)", () => {
     expect(daSandra.find((r) => r.className === "2º Ano A")?.done).toBe(1)
     expect(daSandra.find((r) => r.className === "1º Ano A")?.activities).toBe(0)
 
+    // Professor NÃO consulta agregados de outro professor: `teacherId` é
+    // IGNORADO para o papel teacher, então o recorte tem de ser idêntico ao sem
+    // filtro — inclusive as atividades da Sandra nas turmas compartilhadas (c2).
+    const semTeacherId = await getReport<CompletionBodyRow[]>(marcelo, "/api/reports/completion")
     const doMarcelo = await getReport<CompletionBodyRow[]>(marcelo, "/api/reports/completion?teacherId=u7")
+    expect(doMarcelo).toEqual(semTeacherId)
     expect(doMarcelo.map((r) => r.className)).toEqual(["1º Ano A", "2º Ano A"])
+    expect(doMarcelo.find((r) => r.className === "2º Ano A")?.activities).toBe(2)
     const foraDoEscopo = await getReport<CompletionBodyRow[]>(marcelo, "/api/reports/completion?classId=c3")
     expect(foraDoEscopo).toEqual([])
   })
@@ -962,9 +979,12 @@ describe("Relatórios completos da coordenação (Task 4.5)", () => {
     expect(daSandra.find((r) => r.studentName === "Ricardo Lima")?.balance).toBe(40)
     expect(daSandra.find((r) => r.studentName === "Ana Luiza Ribeiro")?.balance).toBe(0)
 
-    // Professor NÃO amplia o escopo via query: o roster dele é c1+c2, então a
-    // Fernanda (c3) não aparece e o classId fora do escopo devolve vazio.
+    // Professor NÃO amplia o escopo via query e `teacherId` alheio é ignorado:
+    // o resultado é o mesmo de sem filtro (roster c1+c2), então a Fernanda (c3)
+    // não aparece e o classId fora do escopo devolve vazio.
+    const pontosSemTeacherId = await getReport<PointsBodyRow[]>(marcelo, "/api/reports/points")
     const doMarcelo = await getReport<PointsBodyRow[]>(marcelo, "/api/reports/points?teacherId=u7")
+    expect(doMarcelo).toEqual(pontosSemTeacherId)
     expect(doMarcelo.map((r) => r.studentName)).not.toContain("Fernanda Costa")
     expect(await getReport<PointsBodyRow[]>(marcelo, "/api/reports/points?classId=c3")).toEqual([])
   })
@@ -1210,9 +1230,15 @@ describe("Relatórios completos da coordenação (Task 4.5)", () => {
       {
         path: "/api/reports/activity-detail?format=csv&classId=c1",
         header:
-          "Atividade;Tipo;Matéria;Turma;Professor;Prazo;Entregas;Aprovadas;Reprovadas;Pendentes;Atrasadas;%",
+          "Atividade;Tipo;Matéria;Turma;Professor;Prazo;Entregas;Aprovadas;Reprovadas;Pendentes;Atrasadas;Aprovação",
         filename: "relatorio-atividades.csv",
         contem: "Matemática c1",
+      },
+      {
+        path: "/api/reports/teacher-summary?format=csv&teacherId=u7",
+        header: "Professor;Atividades;Entregas;Aprovadas;Atrasadas;Aprovação %",
+        filename: "relatorio-professores.csv",
+        contem: "Prof. Sandra Alves",
       },
       {
         path: "/api/reports/rankings/classes?format=csv&classId=c1",
@@ -1234,6 +1260,7 @@ describe("Relatórios completos da coordenação (Task 4.5)", () => {
       expect(res.text.charCodeAt(0), `BOM ausente em ${caso.path}`).toBe(0xfeff)
       expect(res.text, `cabeçalho ausente em ${caso.path}`).toContain(caso.header)
       expect(res.text, `conteúdo ausente em ${caso.path}`).toContain(caso.contem)
+      expect(res.headers["content-type"], `content-type de ${caso.path}`).toContain("text/csv")
       expect(res.headers["content-disposition"]).toContain(caso.filename)
     }
   })
@@ -1241,6 +1268,7 @@ describe("Relatórios completos da coordenação (Task 4.5)", () => {
   it("rotas novas são exclusivas da coordenação; professor e aluno recebem 403", async () => {
     const rotas = [
       "/api/reports/activity-detail",
+      "/api/reports/teacher-summary",
       "/api/reports/rankings/classes",
       "/api/reports/rankings/subjects",
     ]
@@ -1249,5 +1277,170 @@ describe("Relatórios completos da coordenação (Task 4.5)", () => {
       expect((await ana.get(rota)).status, `aluno em ${rota}`).toBe(403)
       expect((await coord.get(rota)).status, `coordenação em ${rota}`).toBe(200)
     }
+  })
+
+  it("relatório sem sessão é 401 e staff em rota coordinator-only é 403", async () => {
+    // Sem cookie `sid`, `requireAuth` responde 401 — a regressão que um teste só
+    // de 403 (sessão válida de papel errado) não pega.
+    const semSessao = await request(app).get("/api/reports/completion")
+    expect(semSessao.status).toBe(401)
+
+    const carlos = await loginAgent(app, USERS.carlos.email)
+    expect((await carlos.get("/api/reports/activity-detail")).status).toBe(403)
+    expect((await carlos.get("/api/reports/teacher-summary")).status).toBe(403)
+  })
+
+  it("teacher-summary: agrega conclusão e atraso por professor, com filtros", async () => {
+    const resumo = await getReport<TeacherSummaryBodyRow[]>(coord, "/api/reports/teacher-summary")
+    // Marcelo: a1,a2,a3,a5,a6 = 5 atividades; 7 entregas (3+1+1+1+1), 5
+    // aprovadas e 1 atrasada (a de `under_review` em a1). 5/7 = 71%.
+    // Sandra: só a4, 1 entrega aprovada, sem atraso.
+    expect(resumo).toEqual([
+      {
+        teacherName: "Prof. Marcelo Ferreira",
+        activities: 5,
+        deliveries: 7,
+        approved: 5,
+        late: 1,
+        approvalPct: 71,
+      },
+      {
+        teacherName: "Prof. Sandra Alves",
+        activities: 1,
+        deliveries: 1,
+        approved: 1,
+        late: 0,
+        approvalPct: 100,
+      },
+    ])
+
+    const c1 = await getReport<TeacherSummaryBodyRow[]>(
+      coord,
+      "/api/reports/teacher-summary?classId=c1",
+    )
+    expect(c1).toEqual([
+      {
+        teacherName: "Prof. Marcelo Ferreira",
+        activities: 3,
+        deliveries: 5,
+        approved: 3,
+        late: 1,
+        approvalPct: 60,
+      },
+    ])
+
+    const daSandra = await getReport<TeacherSummaryBodyRow[]>(
+      coord,
+      "/api/reports/teacher-summary?teacherId=u7",
+    )
+    expect(daSandra).toEqual([
+      {
+        teacherName: "Prof. Sandra Alves",
+        activities: 1,
+        deliveries: 1,
+        approved: 1,
+        late: 0,
+        approvalPct: 100,
+      },
+    ])
+  })
+
+  it("completion: aluno aprovado que é desativado sai de done; pct nunca passa de 100", async () => {
+    const antes = await getReport<CompletionBodyRow[]>(coord, "/api/reports/completion?classId=c1")
+    expect(antes[0]).toMatchObject({ students: 3, activities: 3, possible: 9, done: 3, pct: 33 })
+
+    const desativado = await coord.patch(`/api/users/${USERS.mateus.id}`).send({ active: false })
+    expect(desativado.status, `desativação falhou: ${JSON.stringify(desativado.body)}`).toBe(200)
+
+    const depois = await getReport<CompletionBodyRow[]>(coord, "/api/reports/completion?classId=c1")
+    // Roster ativo cai para 2 (Ana e Clara). A aprovação do Mateus em a6 deixa de
+    // contar JUNTO com o aluno: sem o corte no roster, done ficaria 3 com
+    // possible 6 (50%) e a métrica seguiria furada.
+    expect(depois[0]).toMatchObject({ students: 2, activities: 3, possible: 6, done: 2, pct: 33 })
+    expect(depois[0].done).toBeLessThanOrEqual(depois[0].possible)
+    expect(depois[0].pct).toBeLessThanOrEqual(100)
+
+    const reativado = await coord.patch(`/api/users/${USERS.mateus.id}`).send({ active: true })
+    expect(reativado.status, `reativação falhou: ${JSON.stringify(reativado.body)}`).toBe(200)
+    expect(await getReport<CompletionBodyRow[]>(coord, "/api/reports/completion?classId=c1")).toEqual(antes)
+  })
+
+  it("rankings/subjects: aluno e turma inativos saem do ranking", async () => {
+    const antes = await getReport<SubjectRankingBodyGroup[]>(coord, "/api/reports/rankings/subjects")
+    expect(
+      antes.find((g) => g.subjectId === "s2")?.rows.map((r) => r.studentName),
+    ).toContain("Fernanda Costa")
+
+    const turmaDesativada = await coord.patch("/api/classes/c3").send({ active: false })
+    expect(turmaDesativada.status, `desativação da turma falhou: ${JSON.stringify(turmaDesativada.body)}`).toBe(200)
+    const semC3 = await getReport<SubjectRankingBodyGroup[]>(coord, "/api/reports/rankings/subjects")
+    expect(semC3.find((g) => g.subjectId === "s2")?.rows.map((r) => r.studentName)).not.toContain(
+      "Fernanda Costa",
+    )
+    const turmaReativada = await coord.patch("/api/classes/c3").send({ active: true })
+    expect(turmaReativada.status, `reativação da turma falhou: ${JSON.stringify(turmaReativada.body)}`).toBe(200)
+
+    const alunoDesativado = await coord.patch(`/api/users/${USERS.beatriz.id}`).send({ active: false })
+    expect(alunoDesativado.status, `desativação do aluno falhou: ${JSON.stringify(alunoDesativado.body)}`).toBe(200)
+    const semBeatriz = await getReport<SubjectRankingBodyGroup[]>(coord, "/api/reports/rankings/subjects")
+    expect(semBeatriz.find((g) => g.subjectId === "s2")?.rows.map((r) => r.studentName)).not.toContain(
+      "Beatriz Souza",
+    )
+    const alunoReativado = await coord.patch(`/api/users/${USERS.beatriz.id}`).send({ active: true })
+    expect(alunoReativado.status, `reativação do aluno falhou: ${JSON.stringify(alunoReativado.body)}`).toBe(200)
+
+    expect(await getReport<SubjectRankingBodyGroup[]>(coord, "/api/reports/rankings/subjects")).toEqual(antes)
+  })
+
+  it("points/rankings: pontos de atividade soft-deleted continuam contando (decisão 3)", async () => {
+    const db = getDb()
+    const atividadeExcluida = createActivity(db, {
+      classId: "c3",
+      teacherId: USERS.marcelo.id,
+      subjectId: "s2",
+      title: "Atividade excluída depois da aprovação",
+      deadline: "13/09/2026",
+      status: "active",
+      createdAt: "10/03/2026, 08:00:00",
+    })
+    createTransaction(db, {
+      studentId: USERS.fernanda.id,
+      amount: 25,
+      type: "activity",
+      relatedActivityId: atividadeExcluida,
+      createdBy: USERS.marcelo.id,
+      createdAt: "10/03/2026, 12:00:00",
+    })
+
+    const saldoFernanda = async (path: string) =>
+      (await getReport<PointsBodyRow[]>(coord, path)).find((r) => r.studentName === "Fernanda Costa")
+        ?.balance
+    // Antes: 50 (a5, s2/u6) + 25 da atividade nova.
+    expect(await saldoFernanda("/api/reports/points")).toBe(75)
+    expect(await saldoFernanda("/api/reports/points?subjectId=s2")).toBe(75)
+    expect(await saldoFernanda("/api/reports/points?teacherId=u6")).toBe(75)
+
+    const deleted = await marcelo.delete(`/api/activities/${atividadeExcluida}`)
+    expect(deleted.status, `exclusão falhou: ${JSON.stringify(deleted.body)}`).toBe(200)
+
+    // Decisão 3: a exclusão não estorna pontos. O saldo e os recortes por
+    // matéria/professor continuam com os mesmos 75, e o ranking por matéria idem.
+    expect(await saldoFernanda("/api/reports/points")).toBe(75)
+    expect(await saldoFernanda("/api/reports/points?subjectId=s2")).toBe(75)
+    expect(await saldoFernanda("/api/reports/points?teacherId=u6")).toBe(75)
+    const ranking = await getReport<SubjectRankingBodyGroup[]>(coord, "/api/reports/rankings/subjects")
+    expect(
+      ranking.find((g) => g.subjectId === "s2")?.rows.find((r) => r.studentName === "Fernanda Costa")
+        ?.points,
+    ).toBe(75)
+  })
+
+  it("toCsv: BOM no início e escaping de ;, aspas e quebra de linha", () => {
+    const csv = toCsv(
+      ["Nome", "Observação"],
+      [["Ana; Beatriz", 'Ele disse "oi"\ne tchau']],
+    )
+    expect(csv.charCodeAt(0)).toBe(0xfeff)
+    expect(csv).toBe('\uFEFFNome;Observação\r\n"Ana; Beatriz";"Ele disse ""oi""\ne tchau"')
   })
 })

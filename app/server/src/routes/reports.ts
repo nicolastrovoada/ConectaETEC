@@ -9,6 +9,7 @@ import {
   pointsReport,
   subjectRankingsReport,
   teacherPerformanceReport,
+  teacherSummaryReport,
   toCsv,
   type ReportFilters,
 } from "../services/reports"
@@ -122,7 +123,7 @@ reportsRouter.get(
         res,
         "relatorio-atividades.csv",
         toCsv(
-          ["Atividade", "Tipo", "Matéria", "Turma", "Professor", "Prazo", "Entregas", "Aprovadas", "Reprovadas", "Pendentes", "Atrasadas", "%"],
+          ["Atividade", "Tipo", "Matéria", "Turma", "Professor", "Prazo", "Entregas", "Aprovadas", "Reprovadas", "Pendentes", "Atrasadas", "Aprovação"],
           data.map((r) => [
             r.title,
             ACTIVITY_TYPE_LABELS[r.type as keyof typeof ACTIVITY_TYPE_LABELS] ?? r.type,
@@ -137,6 +138,34 @@ reportsRouter.get(
             r.late,
             r.donePct,
           ]),
+        ),
+      )
+      return
+    }
+    sendData(res, 200, data)
+  }),
+)
+
+/**
+ * GET /api/reports/teacher-summary — conclusão e atraso POR PROFESSOR (4.5).
+ *
+ * Coordinator-only, como os demais relatórios agregados. Reaproveita os filtros
+ * comuns (`reportFiltersOf`) e o mesmo recorte de `activity-detail`; o CSV leva
+ * as seis colunas exibidas na tela.
+ */
+reportsRouter.get(
+  "/teacher-summary",
+  requireAuth,
+  requireRoles("coordinator"),
+  handle((req, res) => {
+    const data = teacherSummaryReport(reportFiltersOf(req.query))
+    if (req.query.format === "csv") {
+      sendCsv(
+        res,
+        "relatorio-professores.csv",
+        toCsv(
+          ["Professor", "Atividades", "Entregas", "Aprovadas", "Atrasadas", "Aprovação %"],
+          data.map((r) => [r.teacherName, r.activities, r.deliveries, r.approved, r.late, r.approvalPct]),
         ),
       )
       return

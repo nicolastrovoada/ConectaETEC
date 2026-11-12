@@ -93,8 +93,10 @@ export interface ActivitiesByTypeRow {
 
 /**
  * Uma atividade no relatório de atrasos da coordenação (4.5) —
- * `GET /api/reports/activity-detail`. `deadline` e `createdAt` chegam no formato
- * gravado (`DD/MM/AAAA` / `DD/MM/AAAA, HH:MM:SS`) e são exibidos como vieram.
+ * `GET /api/reports/activity-detail`. `deadline` chega no formato gravado
+ * (`DD/MM/AAAA`) e é exibido como veio. `createdAt` não é exibido nem usado,
+ * então não faz parte do contrato do cliente (o servidor pode continuar
+ * devolvendo).
  */
 export interface ActivityDetailReportRow {
   activityId: string
@@ -104,13 +106,22 @@ export interface ActivityDetailReportRow {
   className: string
   teacherName: string
   deadline: string
-  createdAt: string
   deliveries: number
   approved: number
   rejected: number
   pending: number
   late: number
   donePct: number
+}
+
+/** Uma linha do resumo por professor — `GET /api/reports/teacher-summary` (4.5). */
+export interface TeacherSummaryRow {
+  teacherName: string
+  activities: number
+  deliveries: number
+  approved: number
+  late: number
+  approvalPct: number
 }
 
 /** Uma linha do ranking de pontos da coordenação: um aluno dentro de uma turma. */
