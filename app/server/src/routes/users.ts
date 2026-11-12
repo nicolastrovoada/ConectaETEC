@@ -1,14 +1,18 @@
-import { Router } from "express"
+import fs from "node:fs"
+import path from "node:path"
+import { Router, type NextFunction, type Request, type Response } from "express"
+import multer from "multer"
 import { z } from "zod"
 import { requireAuth, requireRoles, requireUser, forbidAndAudit } from "../auth/middleware"
-import { hashPassword } from "../auth/password"
+import { hashPassword, verifyPassword } from "../auth/password"
 import { revokeUserSessionsExcept } from "../auth/session"
 import { getDb } from "../db/connection"
 import { findClassById, findUserByEmail, findUserById } from "../db/queries"
 import { mapSafeUser, userToRow, type UserRow } from "../db/rows"
 import { todayBR, startOfToday } from "../lib/dates"
-import { conflict, notFound } from "../lib/errors"
+import { badRequest, conflict, notFound, unprocessable } from "../lib/errors"
 import { handle, sendData } from "../lib/http"
+import { avatarDir, cleanupUploadedFiles, normalizeUploadedFile, uploadAvatar } from "../lib/uploads"
 import { uuid } from "../lib/uuid"
 import { recordAudit } from "../services/audit"
 import { listTransactionsByStudent, getBalance } from "../services/points"
@@ -30,6 +34,20 @@ const updateUserSchema = z.object({
   password: z.string().min(6, "Senha deve ter ao menos 6 caracteres.").optional(),
   classIds: z.array(z.string()).optional(),
 }).strict()
+
+/**
+ * Payload do próprio perfil. `.strict()` é proposital: papel, turmas, situação,
+ * e-mail e avatar NÃO são campos que o usuário muda por aqui — o avatar tem a
+ * rota multipart própria e os demais são exclusivos da coordenação. Um payload
+ * com qualquer um deles é 400 (não ignoramos em silêncio).
+ */
+const updateSelfSchema = z
+  .object({
+    name: z.string().trim().min(3, "Nome deve ter ao menos 3 caracteres.").optional(),
+    currentPassword: z.string().optional(),
+    newPassword: z.string().min(6, "Senha deve ter ao menos 6 caracteres.").optional(),
+  })
+  .strict()
 
 const PARTIAL_SYNC_ROLES: Role[] = ["student", "teacher"]
 
@@ -121,6 +139,161 @@ usersRouter.post(
       description: `Coordenação criou ${created.role} '${created.name}' (${created.email})${classIds.length > 0 ? " em " + classIds.join(",") : ""}`,
     })
     sendData(res, 201, mapSafeUser(userToRow(created)))
+  }),
+)
+
+/**
+ * Multer de avatar com erro de limite traduzido para o contexto da foto (o
+ * handler central fala em 5 MB, que é o limite das evidências).
+ */
+const avatarUpload = uploadAvatar.single("avatar")
+function avatarUploadMiddleware(req: Request, res: Response, next: NextFunction): void {
+  avatarUpload(req, res, (error: unknown) => {
+    if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
+      if (req.file) cleanupUploadedFiles([req.file])
+      next(unprocessable("Arquivo excede o limite de 2 MB.", "LIMIT_FILE_SIZE"))
+      return
+    }
+    next(error)
+  })
+}
+
+/**
+ * PATCH /api/users/me — o próprio usuário edita nome e senha.
+ *
+ * Registrada ANTES de `PATCH /:id`: no Express a ordem importa e `/me` cairia no
+ * handler de coordenação (403 para aluno/professor).
+ *
+ * `currentPassword` só é exigido quando `newPassword` vem. Nome sozinho não pede
+ * senha (decisão de UX): não é credencial, e exigir a senha para corrigir o
+ * próprio nome criaria atrito sem ganho de segurança. Trocar a senha, sim,
+ * exige a atual — inclusive para invalidar sessões antigas com a nova.
+ */
+usersRouter.patch(
+  "/me",
+  requireAuth,
+  handle((req, res) => {
+    const body = updateSelfSchema.parse(req.body)
+    const self = requireUser(res)
+    const db = getDb()
+
+    const current = findUserById(db, self.id)
+    if (!current) throw notFound("Usuário não encontrado.")
+
+    const changes: string[] = []
+    let nextPassword = current.password
+    let nextAvatar = current.avatar
+    const nextName = body.name ?? current.name
+
+    if (body.newPassword !== undefined) {
+      if (!body.currentPassword || !verifyPassword(body.currentPassword, current.password)) {
+        throw badRequest("Senha atual inválida.", "INVALID_CURRENT_PASSWORD")
+      }
+      nextPassword = hashPassword(body.newPassword)
+      changes.push("senha atualizada")
+    }
+
+    if (body.name !== undefined && body.name !== current.name) {
+      changes.push(`nome → ${body.name}`)
+      // A letra de fallback acompanha o nome; uma foto enviada é preservada.
+      if (!current.avatar.startsWith("/uploads/")) {
+        nextAvatar = (body.name.charAt(0) || "?").toUpperCase()
+      }
+    }
+
+    if (changes.length === 0) {
+      sendData(res, 200, mapSafeUser(userToRow(current)))
+      return
+    }
+
+    db.prepare("UPDATE users SET name = ?, password = ?, avatar = ? WHERE id = ?").run(
+      nextName,
+      nextPassword,
+      nextAvatar,
+      current.id,
+    )
+
+    if (body.newPassword !== undefined) {
+      // A sessão que fez a troca continua válida; as demais caem (RN de sessão).
+      revokeUserSessionsExcept(current.id, res.locals.sessionToken ?? null)
+    }
+
+    recordAudit({
+      userId: current.id,
+      action: "USER_UPDATED",
+      entity: "User",
+      entityId: current.id,
+      description: `${current.name} atualizou o próprio perfil: ${changes.join(", ")}`,
+    })
+
+    const updated = findUserById(db, current.id)
+    if (!updated) throw notFound("Usuário não encontrado após atualização.")
+    sendData(res, 200, mapSafeUser(userToRow(updated)))
+  }),
+)
+
+/**
+ * POST /api/users/me/avatar — upload da foto de perfil (multipart "avatar").
+ *
+ * A foto vive em `uploadsDir/avatars`, com nome único e extensão DETECTADA por
+ * magic bytes (`normalizeUploadedFile`). O tipo é reconferido depois: o helper
+ * aceita PDF, que é válido para evidência e não para foto.
+ */
+usersRouter.post(
+  "/me/avatar",
+  requireAuth,
+  avatarUploadMiddleware,
+  handle((req, res) => {
+    const self = requireUser(res)
+    const file = req.file
+    if (!file) throw badRequest("Selecione uma imagem para a foto de perfil.", "FILE_REQUIRED")
+
+    try {
+      normalizeUploadedFile(file, { directory: avatarDir() })
+      if (!file.mimetype.startsWith("image/")) {
+        throw unprocessable(
+          "Envie uma imagem (JPEG/PNG/WebP/GIF) para a foto de perfil.",
+          "UNSUPPORTED_FILE_TYPE",
+        )
+      }
+
+      const storedName = path.basename(file.path)
+      const db = getDb()
+      const current = findUserById(db, self.id)
+      if (!current) throw notFound("Usuário não encontrado.")
+
+      db.prepare("UPDATE users SET avatar = ? WHERE id = ?").run(
+        `/uploads/avatars/${storedName}`,
+        current.id,
+      )
+
+      // A foto antiga não fica órfã no disco (best-effort: ausência não falha).
+      if (current.avatar.startsWith("/uploads/avatars/")) {
+        const oldName = path.basename(current.avatar)
+        if (oldName !== storedName && /^[A-Za-z0-9._-]+$/.test(oldName)) {
+          try {
+            fs.unlinkSync(path.join(avatarDir(), oldName))
+          } catch {
+            // arquivo já removido — ignora
+          }
+        }
+      }
+
+      recordAudit({
+        userId: current.id,
+        action: "USER_UPDATED",
+        entity: "User",
+        entityId: current.id,
+        description: `${current.name} atualizou a própria foto de perfil`,
+      })
+
+      const updated = findUserById(db, current.id)
+      if (!updated) throw notFound("Usuário não encontrado após atualização.")
+      sendData(res, 200, mapSafeUser(userToRow(updated)))
+    } catch (error) {
+      cleanupUploadedFiles([file])
+      throw error
+    }
   }),
 )
 

@@ -7,8 +7,14 @@ import { nowBR } from "./dates"
 import { badRequest, unprocessable } from "./errors"
 import { uuid } from "./uuid"
 
+/** Pasta das fotos de perfil (subpasta de `uploadsDir`, servida por rota própria). */
+export function avatarDir(): string {
+  return path.join(config.uploadsDir, "avatars")
+}
+
 export function ensureUploadsDir(): void {
   fs.mkdirSync(config.uploadsDir, { recursive: true })
+  fs.mkdirSync(avatarDir(), { recursive: true })
 }
 
 export function isAllowedUpload(mimeType: string, originalName: string): boolean {
@@ -52,13 +58,25 @@ export function detectFileType(buffer: Buffer): DetectedFileType | null {
   return null
 }
 
+export interface NormalizeUploadOptions {
+  /**
+   * Pasta de destino quando o nome precisa ser renomeado pela extensão
+   * DETECTADA. Evidências usam a raiz de `uploadsDir`; avatares usam
+   * `uploadsDir/avatars` (nunca a raiz, senão a foto sai da pasta servida).
+   */
+  directory?: string
+}
+
 /**
  * Valida o conteúdo do arquivo após o multer (magic bytes). Se o conteúdo não
  * bater com a extensão declarada, rejeita 422. Renomeia o arquivo no storage
  * usando a extensão DETECTADA (nunca a do nome original do cliente) e ajusta o
  * mimetype para o valor verificado.
  */
-export function normalizeUploadedFile(file: Express.Multer.File): Express.Multer.File {
+export function normalizeUploadedFile(
+  file: Express.Multer.File,
+  options: NormalizeUploadOptions = {},
+): Express.Multer.File {
   const magic = fs.readFileSync(file.path)
   const detected = detectFileType(magic)
   if (!detected) {
@@ -76,7 +94,7 @@ export function normalizeUploadedFile(file: Express.Multer.File): Express.Multer
   }
   if (path.extname(file.path).toLowerCase() !== detected.extension) {
     const storedName = `${uuid()}${detected.extension}`
-    const newPath = path.join(config.uploadsDir, storedName)
+    const newPath = path.join(options.directory ?? config.uploadsDir, storedName)
     fs.renameSync(file.path, newPath)
     file.path = newPath
     file.filename = storedName
@@ -110,6 +128,44 @@ export const uploadAttachments = multer({
       cb(
         unprocessable(
           "Tipo de arquivo não permitido. Envie imagens (JPEG/PNG/WebP/GIF) ou PDF.",
+          "UNSUPPORTED_FILE_TYPE",
+        ),
+      )
+      return
+    }
+    cb(null, true)
+  },
+})
+
+/** Multer configurado para fotos de perfil: só imagens, 1 arquivo, máx. 2 MB. */
+const AVATAR_MIME_TYPES: ReadonlySet<string> = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+])
+const AVATAR_EXTENSIONS: ReadonlySet<string> = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif"])
+
+export const uploadAvatar = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      ensureUploadsDir()
+      cb(null, avatarDir())
+    },
+    filename: (_req, file, cb) => {
+      cb(null, buildStoredName(file.originalname))
+    },
+  }),
+  limits: {
+    fileSize: config.maxAvatarBytes,
+    files: 1,
+  },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase()
+    if (!AVATAR_MIME_TYPES.has(file.mimetype) || !AVATAR_EXTENSIONS.has(ext)) {
+      cb(
+        unprocessable(
+          "Envie uma imagem (JPEG/PNG/WebP/GIF) para a foto de perfil.",
           "UNSUPPORTED_FILE_TYPE",
         ),
       )

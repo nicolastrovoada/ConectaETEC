@@ -30,6 +30,7 @@ export const config = {
   bcryptRounds: 10,
   maxAttachments: 3,
   maxAttachmentBytes: 5 * 1024 * 1024, // 5 MB
+  maxAvatarBytes: 2 * 1024 * 1024, // 2 MB — foto de perfil
 } as const
 
 export const ALLOWED_UPLOAD_MIME_TYPES: ReadonlySet<string> = new Set([

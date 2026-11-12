@@ -19,6 +19,17 @@ function pngFile(payload: string): Buffer {
   return Buffer.concat([PNG_SIGNATURE, Buffer.from(payload)])
 }
 
+/**
+ * Arquivos da RAIZ de uploads (evidências). A subpasta `avatars/` é criada por
+ * `ensureUploadsDir` para o perfil e não é byte órfão de anexo.
+ */
+function rootFiles(): string[] {
+  return fs
+    .readdirSync(config.uploadsDir)
+    .filter((name) => fs.statSync(path.join(config.uploadsDir, name)).isFile())
+    .sort()
+}
+
 // Lacuna de cobertura: bordas do upload — limite de tamanho, validação de
 // storedName (traversal) e substituição de anexo antigo no reenvio.
 describe("Upload de evidências — casos de borda", () => {
@@ -48,7 +59,7 @@ describe("Upload de evidências — casos de borda", () => {
     // O `limits.fileSize` do multer aborta DEPOIS de gravar o arquivo no
     // `uploadsDir`, e nesse caminho o `handle` da rota não roda — então o
     // `cleanupUploadedFiles` (que mora dentro dele) não pode ser o responsável.
-    const arquivosAntes = fs.readdirSync(config.uploadsDir)
+    const arquivosAntes = rootFiles()
     const res = await ana
       .post("/api/activities/a1/submissions")
       .field("comment", "mega arquivo")
@@ -59,19 +70,19 @@ describe("Upload de evidências — casos de borda", () => {
     expect(res.status).toBe(422)
     expect(res.body.error).toContain("5 MB")
     expect(res.body.details).toBe("LIMIT_FILE_SIZE")
-    expect(fs.readdirSync(config.uploadsDir), "byte órfão do arquivo acima do limite").toEqual(
+    expect(rootFiles(), "byte órfão do arquivo acima do limite").toEqual(
       arquivosAntes,
     )
   })
 
   it("4 anexos numa entrega → 422 sem deixar byte no disco", async () => {
     const ana = await setupAna()
-    const arquivosAntes = fs.readdirSync(config.uploadsDir)
+    const arquivosAntes = rootFiles()
     const muitos = ana.post("/api/activities/a1/submissions").field("comment", "lote grande")
     for (let i = 0; i < 4; i++) muitos.attach("attachments", pngFile(`f${i}`), `f${i}.png`)
     const res = await muitos
     expect(res.status).toBe(422)
-    expect(fs.readdirSync(config.uploadsDir), "byte órfão do lote acima do limite").toEqual(arquivosAntes)
+    expect(rootFiles(), "byte órfão do lote acima do limite").toEqual(arquivosAntes)
   })
 
   it("validateStoredName rejeita traversal e caminhos", () => {

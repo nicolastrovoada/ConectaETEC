@@ -3,6 +3,7 @@ import { ROLE_ICONS, ROLE_LABELS } from "@shared/types"
 import { useUser } from "../context/UserContext"
 import { usePreferences, type FontSize } from "../context/PreferencesContext"
 import { useNotificationsController } from "../context/NotificationsContext"
+import { UserAvatar } from "./ui/UserAvatar"
 
 export interface NavItem {
   id: string
@@ -124,12 +125,11 @@ export function Layout({ nav, active, onNavigate, title, subtitle, children }: L
         </div>
 
         <div className="px-5 py-4 border-b border-white/10 flex items-center gap-3">
-          <div
+          <UserAvatar
+            user={user}
             className={`w-9 h-9 rounded-full bg-gradient-to-br ${roleTheme.avatar} flex items-center justify-center text-white text-xs font-black shrink-0`}
-            aria-hidden="true"
-          >
-            {user.avatar}
-          </div>
+            textClassName="text-xs font-black"
+          />
           <div className="min-w-0">
             <p className="text-white text-sm font-semibold truncate">{user.name}</p>
             <p className={`text-[11px] ${roleTheme.sidebarMuted} truncate`}>

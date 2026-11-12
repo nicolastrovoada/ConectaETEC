@@ -7,7 +7,7 @@ import { getDb } from "../db/connection"
 import { findStudyContentById, findSubmissionById } from "../db/queries"
 import { notFound } from "../lib/errors"
 import { handle } from "../lib/http"
-import { validateStoredName } from "../lib/uploads"
+import { avatarDir, validateStoredName } from "../lib/uploads"
 import { canReadStudyContentAttachment } from "../services/studyContents"
 import type { SafeUser, StudyContent } from "../shared/types"
 
@@ -108,6 +108,50 @@ function canReadSubmissionFile(
     | undefined
   return activity?.teacherId === user.id
 }
+
+/**
+ * GET /uploads/avatars/:storedName — foto de perfil.
+ *
+ * Rota PRÓPRIA (registrada antes de `/:storedName`): um avatar não tem linha em
+ * `attachments`/`study_content_attachments`, então a rota genérica o trataria
+ * como inexistente. A autorização é a existência de um usuário apontando para
+ * aquele arquivo; qualquer sessão autenticada pode ver a foto (elas aparecem em
+ * listas e no header), mas nunca sem cookie. Nome inválido, linha ausente e
+ * arquivo ausente respondem o MESMO 404 — não vazamos existência.
+ */
+const AVATAR_CONTENT_TYPES: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+}
+
+uploadsRouter.get(
+  "/avatars/:storedName",
+  requireAuth,
+  handle((req, res) => {
+    const storedName = req.params.storedName
+    if (!validateStoredName(storedName)) throw notFound("Arquivo não encontrado.", "FILE_MISSING")
+
+    const db = getDb()
+    const row = db
+      .prepare("SELECT 1 AS found FROM users WHERE avatar = ? LIMIT 1")
+      .get(`/uploads/avatars/${storedName}`)
+    if (!row) throw notFound("Arquivo não encontrado.", "FILE_MISSING")
+
+    const contentType = AVATAR_CONTENT_TYPES[path.extname(storedName).toLowerCase()]
+    const filePath = path.join(avatarDir(), storedName)
+    if (!contentType || !fs.existsSync(filePath)) {
+      throw notFound("Arquivo não encontrado.", "FILE_MISSING")
+    }
+
+    res.setHeader("Content-Type", contentType)
+    res.setHeader("X-Content-Type-Options", "nosniff")
+    res.setHeader("Cache-Control", "private, max-age=300")
+    res.sendFile(filePath)
+  }),
+)
 
 uploadsRouter.get(
   "/:storedName",
