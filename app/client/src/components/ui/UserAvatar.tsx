@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import type { SafeUser } from "@shared/types"
 
 interface UserAvatarProps {
@@ -18,18 +19,33 @@ interface UserAvatarProps {
  * decide entre `<img>` e letra. A imagem é same-origin, então o cookie httpOnly
  * da sessão acompanha o pedido e a rota protegida de avatares responde.
  *
+ * Se a URL falhar (arquivo removido, banco restaurado, 404), o `<img>` quebrado
+ * não fica na tela: `failed` troca o estado para a letra inicial do nome, que é
+ * o contrato declarado do componente. O estado zera quando `avatar` muda.
+ *
  * `aria-hidden` é seguro: o nome do usuário aparece sempre ao lado do avatar e
  * a foto é decorativa (alt vazio).
  */
 export function UserAvatar({ user, className = "", textClassName = "" }: UserAvatarProps) {
   const hasPhoto = user.avatar.startsWith("/uploads/")
+  const fallback = hasPhoto ? (user.name.trim().charAt(0) || "?").toUpperCase() : user.avatar
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    setFailed(false)
+  }, [user.avatar])
 
   return (
     <div className={`overflow-hidden ${className}`} aria-hidden="true">
-      {hasPhoto ? (
-        <img src={user.avatar} alt="" className="w-full h-full object-cover" />
+      {hasPhoto && !failed ? (
+        <img
+          src={user.avatar}
+          alt=""
+          className="w-full h-full object-cover"
+          onError={() => setFailed(true)}
+        />
       ) : (
-        <span className={textClassName}>{user.avatar}</span>
+        <span className={textClassName}>{fallback}</span>
       )}
     </div>
   )

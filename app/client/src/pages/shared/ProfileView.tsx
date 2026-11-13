@@ -35,9 +35,9 @@ export function ProfileView() {
     [],
   )
 
-  // Turma/curso (aluno) e matérias (professor). As duas listagens já vêm
-  // escopadas pelo servidor; o filtro local só evita mostrar vínculo de outra
-  // pessoa caso a rota mude de escopo no futuro.
+  // Turma/curso (aluno) e matérias (professor). `GET /api/classes` já vem
+  // escopado pelo servidor; `GET /api/subjects` devolve TODAS as disciplinas, e
+  // é o filtro local por `teacherIds` que faz o recorte do professor.
   const classes = useAsync<Class[]>(useCallback(() => api.get<Class[]>("/api/classes"), []), [])
   const subjects = useAsync<Subject[]>(useCallback(() => api.get<Subject[]>("/api/subjects"), []), [])
 
@@ -68,6 +68,12 @@ export function ProfileView() {
       if (previewRef.current) URL.revokeObjectURL(previewRef.current)
     }
   }, [])
+
+  // Ao abrir a edição o foco vai para o primeiro campo, não fica no botão
+  // "Editar perfil" (que some com o modo edição).
+  useEffect(() => {
+    if (editing) document.getElementById("profile-name")?.focus()
+  }, [editing])
 
   function resetForm() {
     setName(user.name)
@@ -120,6 +126,22 @@ export function ProfileView() {
       setUser(updated)
       await refreshUser().catch(() => undefined)
       showToast("Foto de perfil atualizada.")
+
+      // A foto já foi salva: se não há nome/senha pendentes, não faz sentido
+      // continuar em edição e responder "Nenhuma alteração para salvar." no
+      // próximo clique. A prévia blob perde a função — o avatar do servidor
+      // assume — então é revogada aqui.
+      const hasPendingName = name.trim() !== updated.name
+      const hasPendingPassword = newPassword.length > 0
+      if (!hasPendingName && !hasPendingPassword) {
+        if (previewRef.current) {
+          URL.revokeObjectURL(previewRef.current)
+          previewRef.current = null
+        }
+        setAvatarPreview(null)
+        resetForm()
+        setEditing(false)
+      }
     } catch (error) {
       // A prévia de um arquivo que não foi salvo não deve continuar na tela.
       if (previewRef.current) {
@@ -220,6 +242,7 @@ export function ProfileView() {
                   accept="image/png,image/jpeg,image/webp,image/gif"
                   className="sr-only"
                   aria-label="Escolher foto de perfil"
+                  tabIndex={-1}
                   onChange={(event) => void handleAvatarChange(event)}
                 />
                 <Button
@@ -231,7 +254,8 @@ export function ProfileView() {
                   {uploading ? "Enviando foto..." : "Trocar foto"}
                 </Button>
                 <p className="text-xs text-gray-500 dark:text-slate-400 mt-1">
-                  JPEG, PNG, WebP ou GIF — até 2 MB.
+                  JPEG, PNG, WebP ou GIF — até 2 MB. A foto é salva imediatamente;
+                  “Cancelar edição” não desfaz o envio.
                 </p>
               </div>
             )}
@@ -323,7 +347,12 @@ export function ProfileView() {
             </fieldset>
 
             {formError && (
-              <p role="alert" className="text-sm text-red-600 dark:text-red-400">
+              <p
+                id="profile-form-error"
+                role="alert"
+                aria-live="polite"
+                className="text-sm text-red-600 dark:text-red-400"
+              >
                 {formError}
               </p>
             )}

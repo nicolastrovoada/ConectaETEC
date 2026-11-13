@@ -3,7 +3,8 @@ import path from "node:path"
 import { describe, it, expect, beforeAll } from "vitest"
 import request from "supertest"
 import { makeApp, prepareDb, loginAgent, USERS } from "./helpers"
-import { avatarDir } from "../lib/uploads"
+import { config } from "../config"
+import { avatarDir, ensureUploadsDir } from "../lib/uploads"
 import type { Express } from "express"
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
@@ -16,6 +17,9 @@ describe("Usuários (RF02, RF13)", () => {
 
   beforeAll(() => {
     prepareDb()
+    // O teste de PDF lê `avatarDir()`: rodando sozinho (`-t "PDF"`) a pasta
+    // ainda não existe, porque nenhum teste de upload anterior a criou.
+    ensureUploadsDir()
     app = makeApp()
   })
 
@@ -124,6 +128,18 @@ describe("Usuários (RF02, RF13)", () => {
     }
   })
 
+  it("PATCH /me sem alterações → 400 NO_CHANGES", async () => {
+    const ana = await loginAgent(app, USERS.ana.email)
+    const vazio = await ana.patch("/api/users/me").send({})
+    expect(vazio.status).toBe(400)
+    expect(vazio.body.details).toBe("NO_CHANGES")
+
+    // Só `currentPassword`, sem `newPassword`, também não altera nada.
+    const soSenhaAtual = await ana.patch("/api/users/me").send({ currentPassword: "123456" })
+    expect(soSenhaAtual.status).toBe(400)
+    expect(soSenhaAtual.body.details).toBe("NO_CHANGES")
+  })
+
   it("PATCH /me com currentPassword errada → 400 e senha intacta", async () => {
     const ana = await loginAgent(app, USERS.ana.email)
     const res = await ana.patch("/api/users/me").send({
@@ -181,6 +197,87 @@ describe("Usuários (RF02, RF13)", () => {
     expect(res.status).toBe(422)
     expect(res.body.details).toBe("INVALID_FILE_CONTENT")
     expect(fs.readdirSync(avatarDir()).sort()).toEqual(before)
+  })
+
+  it("avatar acima de 2 MB → 422 LIMIT_FILE_SIZE e nada fica no disco", async () => {
+    const ana = await loginAgent(app, USERS.ana.email)
+    const before = fs.readdirSync(avatarDir()).sort()
+    const grande = Buffer.alloc(config.maxAvatarBytes + 1)
+    PNG_SIGNATURE.copy(grande)
+
+    const res = await ana
+      .post("/api/users/me/avatar")
+      .attach("avatar", grande, { filename: "grande.png", contentType: "image/png" })
+
+    expect(res.status).toBe(422)
+    expect(res.body.details).toBe("LIMIT_FILE_SIZE")
+    expect(fs.readdirSync(avatarDir()).sort()).toEqual(before)
+  })
+
+  it("avatar inexistente e nome inválido respondem 404 uniforme", async () => {
+    const ana = await loginAgent(app, USERS.ana.email)
+
+    const inexistente = await ana.get("/uploads/avatars/nao-existe.png")
+    expect(inexistente.status).toBe(404)
+    expect(inexistente.body.details).toBe("FILE_MISSING")
+
+    // Path traversal percent-encoded: o param chega decodificado ao guard.
+    const traversal = await ana.get("/uploads/avatars/%2e%2e%2fsegredo.png")
+    expect(traversal.status).toBe(404)
+  })
+
+  it("coordenação edita usuário com foto sem apagar o avatar", async () => {
+    const beatriz = await loginAgent(app, USERS.beatriz.email)
+    const upload = await beatriz
+      .post("/api/users/me/avatar")
+      .attach("avatar", pngFile("foto-beatriz"), { filename: "beatriz.png", contentType: "image/png" })
+    expect(upload.status).toBe(200)
+    const avatar = upload.body.data.avatar as string
+    expect(avatar).toMatch(/^\/uploads\/avatars\/.+\.png$/)
+    const storedName = path.basename(avatar)
+    expect(fs.existsSync(path.join(avatarDir(), storedName))).toBe(true)
+
+    // O modal da coordenação manda `name` em toda edição; o avatar de foto
+    // precisa sobreviver à mudança de nome/papel/situação.
+    const coord = await loginAgent(app, USERS.juliana.email)
+    const res = await coord.patch(`/api/users/${USERS.beatriz.id}`).send({
+      name: "Beatriz Almeida Lima",
+      role: "teacher",
+      active: true,
+      classIds: ["c2"],
+    })
+    expect(res.status).toBe(200)
+    expect(res.body.data.avatar).toBe(avatar)
+    expect(res.body.data.name).toBe("Beatriz Almeida Lima")
+
+    const me = await beatriz.get("/api/auth/me")
+    expect(me.status).toBe(200)
+    expect(me.body.data.avatar).toBe(avatar)
+    expect(fs.existsSync(path.join(avatarDir(), storedName))).toBe(true)
+  })
+
+  it("auditoria registra USER_UPDATED para nome e foto do próprio perfil", async () => {
+    const ana = await loginAgent(app, USERS.ana.email)
+    const novoNome = "Ana Auditoria"
+    const nome = await ana.patch("/api/users/me").send({ name: novoNome })
+    expect(nome.status).toBe(200)
+
+    const foto = await ana
+      .post("/api/users/me/avatar")
+      .attach("avatar", pngFile("foto-auditoria"), { filename: "auditoria.png", contentType: "image/png" })
+    expect(foto.status).toBe(200)
+
+    const coord = await loginAgent(app, USERS.juliana.email)
+    const logs = (await coord.get("/api/audit?action=USER_UPDATED")).body.data as Array<{
+      userId: string
+      description: string
+    }>
+    expect(
+      logs.some((l) => l.userId === USERS.ana.id && l.description.includes(`nome → ${novoNome}`)),
+    ).toBe(true)
+    expect(
+      logs.some((l) => l.userId === USERS.ana.id && l.description.includes("foto de perfil")),
+    ).toBe(true)
   })
 
   it("troca de senha própria revoga outras sessões e mantém a atual", async () => {

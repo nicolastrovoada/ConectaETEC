@@ -202,8 +202,9 @@ usersRouter.patch(
     }
 
     if (changes.length === 0) {
-      sendData(res, 200, mapSafeUser(userToRow(current)))
-      return
+      // Payload vazio, ou só `currentPassword`, não altera nada: 400 explícito
+      // evita que um bug de cliente passe como sucesso silencioso.
+      throw badRequest("Nenhuma alteração para salvar.", "NO_CHANGES")
     }
 
     db.prepare("UPDATE users SET name = ?, password = ?, avatar = ? WHERE id = ?").run(
@@ -236,8 +237,9 @@ usersRouter.patch(
  * POST /api/users/me/avatar — upload da foto de perfil (multipart "avatar").
  *
  * A foto vive em `uploadsDir/avatars`, com nome único e extensão DETECTADA por
- * magic bytes (`normalizeUploadedFile`). O tipo é reconferido depois: o helper
- * aceita PDF, que é válido para evidência e não para foto.
+ * magic bytes (`normalizeUploadedFile`). O multer já restringe este fluxo a
+ * imagens (MIME + extensão), e o helper confirma o conteúdo real — não há um
+ * segundo guard de MIME aqui porque ele seria inalcançável.
  */
 usersRouter.post(
   "/me/avatar",
@@ -249,13 +251,10 @@ usersRouter.post(
     if (!file) throw badRequest("Selecione uma imagem para a foto de perfil.", "FILE_REQUIRED")
 
     try {
-      normalizeUploadedFile(file, { directory: avatarDir() })
-      if (!file.mimetype.startsWith("image/")) {
-        throw unprocessable(
-          "Envie uma imagem (JPEG/PNG/WebP/GIF) para a foto de perfil.",
-          "UNSUPPORTED_FILE_TYPE",
-        )
-      }
+      normalizeUploadedFile(file, {
+        directory: avatarDir(),
+        invalidContentMessage: "Envie uma imagem (JPEG/PNG/WebP/GIF) para a foto de perfil.",
+      })
 
       const storedName = path.basename(file.path)
       const db = getDb()
@@ -385,6 +384,15 @@ usersRouter.patch(
       }
     }
 
+    // Só recalcula a letra de fallback quando o avatar atual NÃO é uma foto.
+    // O modal da coordenação envia `name` em toda edição (papel, turma,
+    // situação); sem esta guarda, editar um aluno com foto trocaria a URL por
+    // uma letra e deixaria o arquivo órfão no disco.
+    const nextAvatar =
+      body.name && !user.avatar.startsWith("/uploads/avatars/")
+        ? (body.name.trim().charAt(0) || "?").toUpperCase()
+        : user.avatar
+
     db.prepare(
       `UPDATE users SET name = ?, role = ?, active = ?, classIds = ?, avatar = ? WHERE id = ?`,
     ).run(
@@ -392,7 +400,7 @@ usersRouter.patch(
       nextRole,
       nextActive ? 1 : 0,
       JSON.stringify(nextClassIds),
-      body.name ? (body.name.trim().charAt(0) || "?").toUpperCase() : user.avatar,
+      nextAvatar,
       user.id,
     )
     if (body.password !== undefined) {

@@ -160,6 +160,9 @@ describe("Perfil editável (4.6)", () => {
     }) as typeof api.postForm)
 
     await user.click(await screen.findByRole("button", { name: "Editar perfil" }))
+    expect(
+      screen.getByText(/A foto é salva imediatamente/),
+    ).toBeInTheDocument()
     const arquivo = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "foto.png", {
       type: "image/png",
     })
@@ -170,8 +173,26 @@ describe("Perfil editável (4.6)", () => {
     const enviado = avatarForm?.get("avatar")
     expect(enviado).toBeInstanceOf(File)
     expect((enviado as File).name).toBe("foto.png")
-    expect(await screen.findByAltText("Prévia da nova foto de perfil")).toBeInTheDocument()
     expect(await screen.findByText("Foto de perfil atualizada.")).toBeInTheDocument()
+
+    // Sem nome/senha pendentes, o upload fecha a edição: o próximo clique não
+    // pode cair em "Nenhuma alteração para salvar." nem exibir a prévia blob.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Editar perfil" })).toBeInTheDocument(),
+    )
+    expect(screen.queryByRole("button", { name: "Salvar alterações" })).not.toBeInTheDocument()
+    expect(screen.queryByText("Nenhuma alteração para salvar.")).not.toBeInTheDocument()
+    expect(screen.queryByAltText("Prévia da nova foto de perfil")).not.toBeInTheDocument()
+    expect(document.querySelector('img[src="/uploads/avatars/foto-nova.png"]')).not.toBeNull()
+  })
+
+  it("ao abrir a edição, o foco vai para o campo de nome", async () => {
+    const user = userEvent.setup()
+    renderView()
+
+    await user.click(await screen.findByRole("button", { name: "Editar perfil" }))
+    const nome = screen.getByLabelText(/Nome/)
+    await waitFor(() => expect(document.activeElement).toBe(nome))
   })
 
   it("confirmação de senha divergente bloqueia o PATCH", async () => {

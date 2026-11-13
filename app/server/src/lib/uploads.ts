@@ -65,6 +65,11 @@ export interface NormalizeUploadOptions {
    * `uploadsDir/avatars` (nunca a raiz, senão a foto sai da pasta servida).
    */
   directory?: string
+  /**
+   * Mensagem para conteúdo não reconhecido. Evidências citam PDF; a foto de
+   * perfil usa uma mensagem só de imagem (o multer já barra PDF neste fluxo).
+   */
+  invalidContentMessage?: string
 }
 
 /**
@@ -81,7 +86,8 @@ export function normalizeUploadedFile(
   const detected = detectFileType(magic)
   if (!detected) {
     throw unprocessable(
-      "Conteúdo do arquivo não é um tipo permitido (JPEG/PNG/WebP/GIF/PDF).",
+      options.invalidContentMessage ??
+        "Conteúdo do arquivo não é um tipo permitido (JPEG/PNG/WebP/GIF/PDF).",
       "INVALID_FILE_CONTENT",
     )
   }
