@@ -183,6 +183,19 @@ export function SubmissionsManager({ role, canValidateActivity, title = "Valida�
 
   const activityById = useMemo(() => new Map(allActivities.map((a) => [a.id, a])), [allActivities])
 
+  /**
+   * Atividades oferecidas no filtro: as do escopo, recortadas pela Matéria
+   * escolhida. Matéria e Atividade são E na consulta, então oferecer uma
+   * atividade de outra matéria é oferecer um par que o servidor devolve vazio —
+   * e a lista vazia não diz que o problema foi a combinação. O recorte é LOCAL
+   * (a lista já é a do escopo do papel, 2.5): pedir outra lista com `subjectId`
+   * só trocaria a que está em mãos e poderia virar um caminho de 403.
+   */
+  const atividadesDoFiltro = useMemo(
+    () => (subjectId ? allActivities.filter((a) => a.subjectId === subjectId) : allActivities),
+    [allActivities, subjectId],
+  )
+
   /** Atividade que a tela abre: a pré-selecionada, senão a primeira da lista. */
   const atividadePadrao = preselectActivityId ?? allActivities[0]?.id ?? ""
   // Conta o que REALMENTE sai na query: uma data digitada que não existe (ou um
@@ -311,12 +324,12 @@ export function SubmissionsManager({ role, canValidateActivity, title = "Valida�
               {/* Sem atividade não existe "todas": as duas opções seriam
                   idênticas (mesmo `value`) e o select mostraria "Todas" num
                   lista que não tem nenhuma. */}
-              {allActivities.length === 0 ? (
+              {atividadesDoFiltro.length === 0 ? (
                 <option value="">{FILTROS.atividadeNenhuma}</option>
               ) : (
                 <option value="">{FILTROS.atividadeTodas}</option>
               )}
-              {allActivities.map((a) => (
+              {atividadesDoFiltro.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.title}
                 </option>

@@ -734,6 +734,47 @@ describe("Filtros da validação — matéria, período e busca por aluno (4.1)"
     expect(ids(cruzada.body)).toEqual([])
   })
 
+  // A coordenação não tem escopo de atividade (C3), mas isso NÃO pode ser
+  // estreitado pelos filtros: o mesmo recorte de matéria + atividade + status +
+  // período que, para um professor, devolveria só as próprias linhas, para a
+  // coordenação devolve a entrega do OUTRO professor — e continua cortando o
+  // que está fora do recorte.
+  it("coordenação combina matéria + atividade + status + período sem estreitar o escopo", async () => {
+    const coord = await loginAgent(app, USERS.juliana.email)
+
+    // Controle: sem filtro a coordenação vê as cinco entregas do cenário,
+    // inclusive as de atividades do Marcelo e da Sandra (não existe "dela").
+    const semFiltro = await coord.get("/api/submissions")
+    expect(semFiltro.status).toBe(200)
+    expect(ids(semFiltro.body).sort()).toEqual(
+      ["f4-sub-cronica", "f4-sub-feira", "f4-sub-port", "f4-sub-quimica", "f4-sub-sandra"].sort(),
+    )
+
+    // O recorte inteiro no mesmo pedido: a entrega da Prof. Sandra (u7) é de
+    // outra professora, mas a coordenação a vê — e as outras quatro ficam de
+    // fora (matéria, atividade, status e período cada uma por um motivo).
+    const combinado = await coord.get(
+      "/api/submissions?subjectId=s1&activityId=f4-sandra&status=approved&from=10%2F09%2F2026&to=12%2F09%2F2026",
+    )
+    expect(combinado.status).toBe(200)
+    expect(ids(combinado.body), "entrega de outro professor dentro do recorte").toEqual([
+      "f4-sub-sandra",
+    ])
+
+    // Sem o `activityId`, o mesmo recorte traz as duas do s1 no período (10/09 e
+    // 11/09) — matéria e período continuam valendo; a de 13/09 fica fora.
+    const porMateriaEPeriodo = await coord.get(
+      "/api/submissions?subjectId=s1&status=approved&from=10%2F09%2F2026&to=12%2F09%2F2026",
+    )
+    expect(ids(porMateriaEPeriodo.body).sort()).toEqual(["f4-sub-port", "f4-sub-sandra"].sort())
+
+    // `status` entra de verdade: no mesmo recorte não há entrega `submitted`.
+    const outroStatus = await coord.get(
+      "/api/submissions?subjectId=s1&activityId=f4-sandra&status=submitted&from=10%2F09%2F2026&to=12%2F09%2F2026",
+    )
+    expect(ids(outroStatus.body)).toEqual([])
+  })
+
   it("busca por nome do aluno recorta dentro do escopo, sem 403", async () => {
     const marcelo = await loginAgent(app, USERS.marcelo.email)
     const coord = await loginAgent(app, USERS.juliana.email)
