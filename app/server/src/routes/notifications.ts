@@ -1,5 +1,6 @@
 import { Router } from "express"
-import { requireAuth, requireUser } from "../auth/middleware"
+import { requireAuth, requireUser, forbidAndAudit } from "../auth/middleware"
+import { getDb } from "../db/connection"
 import { notFound } from "../lib/errors"
 import { handle, sendData } from "../lib/http"
 import { recordAudit } from "../services/audit"
@@ -79,8 +80,8 @@ notificationsRouter.patch(
 
 /**
  * Acusa a leitura de UMA notificação: a transitória some, a persistente vira
- * lida. 404 quando ela não existe ou é de outro usuário (mesmo comportamento
- * para os dois casos, como no resto da API).
+ * lida. Inexistente é 404; de OUTRO usuário é 403 com auditoria (RN06), porque
+ * a tentativa de tocar recurso alheio não pode sumir sem rastro.
  */
 notificationsRouter.patch(
   "/:id/read",
@@ -88,7 +89,20 @@ notificationsRouter.patch(
   handle((req, res) => {
     const user = requireUser(res)
     const result = acknowledgeNotification(user.id, req.params.id)
-    if (!result) throw notFound("Notificação não encontrada.")
+    if (!result) {
+      // `acknowledgeNotification` devolve `null` para os dois casos de
+      // propósito (a assinatura não muda). Um SELECT extra só neste caminho
+      // separa "não existe" (404 silencioso) de "existe, mas é de outro dono"
+      // (403 auditado). O 403 revela que o id existe — é o preço de auditar a
+      // negativa, e o resto da API segue o mesmo contrato (`forbidAndAudit`).
+      const row = getDb().prepare("SELECT userId FROM notifications WHERE id = ?").get(req.params.id) as
+        | { userId: string }
+        | undefined
+      if (row) {
+        forbidAndAudit(req, user, `${user.name} tentou marcar como lida notificação de outro usuário`)
+      }
+      throw notFound("Notificação não encontrada.")
+    }
     if (result.transient || result.markedRead > 0) {
       recordAudit({
         userId: user.id,
