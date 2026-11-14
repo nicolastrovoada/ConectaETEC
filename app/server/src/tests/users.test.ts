@@ -327,4 +327,79 @@ describe("Usuários (RF02, RF13)", () => {
     })
     expect(nova.status).toBe(200)
   })
+
+  it("busca de usuários é cega a acento e não trata % como curinga", async () => {
+    prepareDb()
+    const coord = await loginAgent(app, USERS.juliana.email)
+    const criado = await coord.post("/api/users").send({
+      name: "João Pedro Alves",
+      email: "jpedro@etec.sp.gov.br",
+      password: "123456",
+      role: "student",
+      classId: "c1",
+    })
+    expect(criado.status, `criação falhou: ${JSON.stringify(criado.body)}`).toBe(201)
+
+    const nomes = (res: { body: { data: Array<{ name: string; role: string }> } }) =>
+      res.body.data.map((u) => u.name)
+
+    const minusculo = await coord.get("/api/users?search=joao")
+    expect(minusculo.status).toBe(200)
+    expect(nomes(minusculo)).toContain("João Pedro Alves")
+
+    const maiusculo = await coord.get("/api/users?search=JOAO")
+    expect(maiusculo.status).toBe(200)
+    expect(nomes(maiusculo)).toContain("João Pedro Alves")
+
+    // `%` é literal, não curinga: sem ninguém com `%` no nome/e-mail, a busca
+    // devolve vazio em vez de todos.
+    const curinga = await coord.get("/api/users?search=%25")
+    expect(curinga.status).toBe(200)
+    expect(curinga.body.data).toEqual([])
+
+    // Filtro de papel continua valendo junto com a busca.
+    const comPapel = await coord.get("/api/users?role=student&search=joao")
+    expect(comPapel.status).toBe(200)
+    const alunos = comPapel.body.data as Array<{ name: string; role: string }>
+    expect(alunos.map((u) => u.name)).toEqual(["João Pedro Alves"])
+    expect(alunos.every((u) => u.role === "student")).toBe(true)
+
+    // `search` com espaços é trim.
+    const comEspacos = await coord.get("/api/users?search=%20joao%20")
+    expect(nomes(comEspacos)).toContain("João Pedro Alves")
+  })
+
+  it("professor cadastrado com turma entra em teacherIds, não em studentIds (RF02)", async () => {
+    prepareDb()
+    const coord = await loginAgent(app, USERS.juliana.email)
+    const prof = await coord.post("/api/users").send({
+      name: "Professor Novo",
+      email: "prof.novo@etec.sp.gov.br",
+      password: "123456",
+      role: "teacher",
+      classId: "c3",
+    })
+    expect(prof.status, `criação do professor falhou: ${JSON.stringify(prof.body)}`).toBe(201)
+
+    type ClassRow = { id: string; studentIds: string[]; teacherIds: string[] }
+    const classes = await coord.get("/api/classes")
+    const c3 = (classes.body.data as ClassRow[]).find((c) => c.id === "c3")
+    if (!c3) throw new Error("turma c3 não veio em GET /api/classes")
+    expect(c3.teacherIds).toContain(prof.body.data.id)
+    expect(c3.studentIds).not.toContain(prof.body.data.id)
+
+    // O vínculo de ALUNO continua indo para studentIds.
+    const aluno = await coord.post("/api/users").send({
+      name: "Aluno Novo",
+      email: "aluno.novo@etec.sp.gov.br",
+      password: "123456",
+      role: "student",
+      classId: "c1",
+    })
+    expect(aluno.status, `criação do aluno falhou: ${JSON.stringify(aluno.body)}`).toBe(201)
+    const c1 = ((await coord.get("/api/classes")).body.data as ClassRow[]).find((c) => c.id === "c1")
+    if (!c1) throw new Error("turma c1 não veio em GET /api/classes")
+    expect(c1.studentIds).toContain(aluno.body.data.id)
+    expect(c1.teacherIds).not.toContain(aluno.body.data.id)
+  })
 })

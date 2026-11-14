@@ -60,15 +60,25 @@ usersRouter.get(
   handle((req, res) => {
     const db = getDb()
     const role = typeof req.query.role === "string" ? req.query.role : undefined
-    const search = typeof req.query.search === "string" ? req.query.search.trim().toLowerCase() : undefined
+    // Sem `toLowerCase()` aqui: `namekey` faz a dobra no SQL (minúsculas e sem
+    // acento); o `trim` preserva "search só com espaços = sem filtro".
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : undefined
 
-    let rows = db.prepare("SELECT * FROM users ORDER BY name COLLATE NOCASE ASC").all() as unknown as UserRow[]
-    if (role) rows = rows.filter((r) => r.role === role)
-    if (search) {
-      rows = rows.filter(
-        (r) => r.name.toLowerCase().includes(search) || r.email.toLowerCase().includes(search),
-      )
+    const where: string[] = []
+    const params: string[] = []
+    if (role) {
+      where.push("role = ?")
+      params.push(role)
     }
+    if (search) {
+      // `instr` é literal: `%`/`_` não viram curinga (como aconteceria com LIKE).
+      where.push("(instr(namekey(name), namekey(?)) > 0 OR instr(namekey(email), namekey(?)) > 0)")
+      params.push(search, search)
+    }
+    const whereSql = where.length > 0 ? ` WHERE ${where.join(" AND ")}` : ""
+    const rows = db
+      .prepare(`SELECT * FROM users${whereSql} ORDER BY name COLLATE NOCASE ASC`)
+      .all(...params) as unknown as UserRow[]
     sendData(res, 200, rows.map((r) => mapSafeUser(r)))
   }),
 )
@@ -118,12 +128,22 @@ usersRouter.post(
       todayBR(),
     )
 
-    // Vínculo de aluno à turma mantém Class.studentIds consistente (RF02)
-    if (classIds.length > 0) {
+    // Vínculo à turma mantém o roster CORRESPONDENTE de Class consistente
+    // (RF02): aluno entra em `studentIds`, professor em `teacherIds`.
+    // `staff`/`coordinator` não mexem em roster.
+    if (classIds.length > 0 && body.role === "student") {
       const klass = findClassById(db, classIds[0])
       if (klass && !klass.studentIds.includes(id)) {
         db.prepare("UPDATE classes SET studentIds = ? WHERE id = ?").run(
           JSON.stringify([...klass.studentIds, id]),
+          klass.id,
+        )
+      }
+    } else if (classIds.length > 0 && body.role === "teacher") {
+      const klass = findClassById(db, classIds[0])
+      if (klass && !klass.teacherIds.includes(id)) {
+        db.prepare("UPDATE classes SET teacherIds = ? WHERE id = ?").run(
+          JSON.stringify([...klass.teacherIds, id]),
           klass.id,
         )
       }
