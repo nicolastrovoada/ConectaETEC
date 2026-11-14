@@ -1439,15 +1439,17 @@ describe("Relatórios completos da coordenação (Task 4.5)", () => {
       db.prepare("DELETE FROM submissions WHERE activityId = ?").run(atividade)
       db.prepare("DELETE FROM activities WHERE id = ?").run(atividade)
       db.prepare("DELETE FROM users WHERE id = ?").run(homonimoId)
-      // O cadastro de professor com `classId` também entra em `studentIds` da
-      // turma; desfaz o rastro para não contaminar os testes seguintes.
+      // A criação do professor passou pela rota (AUDIT USER_CREATED) e a
+      // atividade/homônimo podem ter deixado rastro; remove para os testes
+      // seguintes não lerem auditoria deste cenário.
+      db.prepare("DELETE FROM auditLogs WHERE entityId = ?").run(homonimoId)
+      db.prepare("DELETE FROM auditLogs WHERE entityId = ?").run(atividade)
+      // O cadastro com `classId: c3` vincula o professor em `teacherIds`
+      // (RF02); desfaz o vínculo para não contaminar os testes seguintes.
       const klass = db
-        .prepare("SELECT studentIds, teacherIds FROM classes WHERE id = 'c3'")
-        .get() as { studentIds: string; teacherIds: string }
-      db.prepare("UPDATE classes SET studentIds = ?, teacherIds = ? WHERE id = 'c3'").run(
-        JSON.stringify(
-          (JSON.parse(klass.studentIds) as string[]).filter((id) => id !== homonimoId),
-        ),
+        .prepare("SELECT teacherIds FROM classes WHERE id = 'c3'")
+        .get() as { teacherIds: string }
+      db.prepare("UPDATE classes SET teacherIds = ? WHERE id = 'c3'").run(
         JSON.stringify(
           (JSON.parse(klass.teacherIds) as string[]).filter((id) => id !== homonimoId),
         ),
@@ -1547,6 +1549,9 @@ describe("Relatórios completos da coordenação (Task 4.5)", () => {
     } finally {
       db.prepare("DELETE FROM transactions WHERE relatedActivityId = ?").run(atividadeExcluida)
       db.prepare("DELETE FROM activities WHERE id = ?").run(atividadeExcluida)
+      // A exclusão pela rota gravou ACTIVITY_DELETED com `entityId` da
+      // atividade; apaga a linha para não vazar para os testes seguintes.
+      db.prepare("DELETE FROM auditLogs WHERE entityId = ?").run(atividadeExcluida)
     }
   })
 
@@ -1567,5 +1572,17 @@ describe("Relatórios completos da coordenação (Task 4.5)", () => {
     // Planilha mostra o texto; não executa a fórmula. Números negativos não
     // passam por aqui porque `escapeCsv` só prefixa `typeof value === "string"`.
     expect(csv).toBe("\uFEFFA;B;C;D;E\r\n'=1+1;'+55;'-x;'@cmd;'\tx")
+  })
+
+  it("toCsv: cobre CR, número negativo e célula já prefixada (CSV injection)", () => {
+    const csv = toCsv(
+      ["CR", "Negativo", "Já prefixada"],
+      [["\r=cmd", -5, "'=SUM(A1:A9)"]],
+    )
+    // CR no início também é gatilho de fórmula: ganha apóstrofo e, por conter
+    // CR, o campo é citado (as aspas internas seriam duplicadas).
+    // Número negativo continua número (sem apóstrofo); uma célula que já vem
+    // com `'` não ganha um segundo apóstrofo.
+    expect(csv).toBe("\uFEFFCR;Negativo;Já prefixada\r\n\"'\r=cmd\";-5;'=SUM(A1:A9)")
   })
 })
