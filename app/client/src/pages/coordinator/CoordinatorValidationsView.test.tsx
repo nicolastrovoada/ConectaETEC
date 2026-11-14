@@ -270,4 +270,28 @@ describe("Coordenação — validação da escola (4.7)", () => {
     expect(pedidosActivities.length).toBe(pedidosDeAtividadesAntes)
     expect(pedidosActivities.every((search) => !search.includes("subjectId"))).toBe(true)
   })
+
+  it("trocar a Matéria reseta a Atividade escolhida à mão", async () => {
+    const user = userEvent.setup()
+    renderView()
+    await waitFor(() => expect(pedidosSubmissions.length).toBeGreaterThan(0))
+    await user.click(botaoFiltros())
+
+    await user.selectOptions(screen.getByLabelText("Matéria"), "m1")
+    // Escolha explícita (a2), não a atividade padrão herdada (a1).
+    await waitFor(() => expect(opcoesAtividade()).toContain("Crônica da feira cultural"))
+    await user.selectOptions(selectAtividade(), "a2")
+    await waitFor(() => {
+      expect(ultimaQuery().get("subjectId")).toBe("m1")
+      expect(ultimaQuery().get("activityId")).toBe("a2")
+    })
+
+    // m2 não tem a2: manter o par seria pedir uma combinação impossível. O
+    // reset precisa chegar à QUERY (e não só à lista de opções).
+    await user.selectOptions(screen.getByLabelText("Matéria"), "m2")
+    await waitFor(() => {
+      expect(ultimaQuery().get("subjectId")).toBe("m2")
+      expect(ultimaQuery().get("activityId")).toBeNull()
+    })
+  })
 })

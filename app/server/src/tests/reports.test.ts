@@ -641,6 +641,7 @@ interface SubjectRankingBodyGroup {
 }
 
 interface TeacherSummaryBodyRow {
+  teacherId: string
   teacherName: string
   activities: number
   deliveries: number
@@ -1297,6 +1298,7 @@ describe("Relatórios completos da coordenação (Task 4.5)", () => {
     // Sandra: só a4, 1 entrega aprovada, sem atraso.
     expect(resumo).toEqual([
       {
+        teacherId: "u6",
         teacherName: "Prof. Marcelo Ferreira",
         activities: 5,
         deliveries: 7,
@@ -1305,6 +1307,7 @@ describe("Relatórios completos da coordenação (Task 4.5)", () => {
         approvalPct: 71,
       },
       {
+        teacherId: "u7",
         teacherName: "Prof. Sandra Alves",
         activities: 1,
         deliveries: 1,
@@ -1320,6 +1323,7 @@ describe("Relatórios completos da coordenação (Task 4.5)", () => {
     )
     expect(c1).toEqual([
       {
+        teacherId: "u6",
         teacherName: "Prof. Marcelo Ferreira",
         activities: 3,
         deliveries: 5,
@@ -1335,6 +1339,7 @@ describe("Relatórios completos da coordenação (Task 4.5)", () => {
     )
     expect(daSandra).toEqual([
       {
+        teacherId: "u7",
         teacherName: "Prof. Sandra Alves",
         activities: 1,
         deliveries: 1,
@@ -1343,6 +1348,111 @@ describe("Relatórios completos da coordenação (Task 4.5)", () => {
         approvalPct: 100,
       },
     ])
+
+    // Período 10–12/03 recorta as ENTREGAS: a de a2 (20/03) e a de a3 (15/03)
+    // ficam fora. As atividades seguem todas no recorte (o período do relatório
+    // detalhado é sobre `submittedAt`), então Marcelo mantém 5 atividades com 5
+    // entregas, 3 aprovadas e 1 atrasada; Sandra segue com a única entrega de a4.
+    const periodo = await getReport<TeacherSummaryBodyRow[]>(
+      coord,
+      "/api/reports/teacher-summary?from=2026-03-10&to=2026-03-12",
+    )
+    expect(periodo).toEqual([
+      {
+        teacherId: "u6",
+        teacherName: "Prof. Marcelo Ferreira",
+        activities: 5,
+        deliveries: 5,
+        approved: 3,
+        late: 1,
+        approvalPct: 60,
+      },
+      {
+        teacherId: "u7",
+        teacherName: "Prof. Sandra Alves",
+        activities: 1,
+        deliveries: 1,
+        approved: 1,
+        late: 0,
+        approvalPct: 100,
+      },
+    ])
+  })
+
+  it("teacher-summary: professores homônimos são duas linhas, somadas por teacherId", async () => {
+    const db = getDb()
+    const homonimo = await coord.post("/api/users").send({
+      name: "Prof. Marcelo Ferreira",
+      email: "marcelo.homonimo@etec.sp.gov.br",
+      password: "123456",
+      role: "teacher",
+      classId: "c3",
+    })
+    expect(homonimo.status, `criação do professor homônimo falhou: ${JSON.stringify(homonimo.body)}`).toBe(
+      201,
+    )
+    const homonimoId = homonimo.body.data.id as string
+
+    const atividade = createActivity(db, {
+      classId: "c3",
+      teacherId: homonimoId,
+      subjectId: "s2",
+      title: "Matemática c3 (homônimo)",
+      deadline: "16/09/2026",
+      status: "active",
+      createdAt: "10/03/2026, 08:00:00",
+    })
+    createSubmission(db, {
+      activityId: atividade,
+      studentId: USERS.fernanda.id,
+      status: "approved",
+      submittedAt: "10/03/2026, 09:00:00",
+      validatedBy: homonimoId,
+      validatedAt: "10/03/2026, 10:00:00",
+    })
+
+    try {
+      const resumo = await getReport<TeacherSummaryBodyRow[]>(coord, "/api/reports/teacher-summary")
+      const homonimos = resumo.filter((r) => r.teacherName === "Prof. Marcelo Ferreira")
+      // O nome é igual, mas o id separa as somas: sem a chave por `teacherId`,
+      // as duas contas viravam uma linha só (5+1 atividades e 7+1 entregas).
+      expect(homonimos).toHaveLength(2)
+      expect(homonimos.find((r) => r.teacherId === USERS.marcelo.id)).toEqual({
+        teacherId: USERS.marcelo.id,
+        teacherName: "Prof. Marcelo Ferreira",
+        activities: 5,
+        deliveries: 7,
+        approved: 5,
+        late: 1,
+        approvalPct: 71,
+      })
+      expect(homonimos.find((r) => r.teacherId === homonimoId)).toEqual({
+        teacherId: homonimoId,
+        teacherName: "Prof. Marcelo Ferreira",
+        activities: 1,
+        deliveries: 1,
+        approved: 1,
+        late: 0,
+        approvalPct: 100,
+      })
+    } finally {
+      db.prepare("DELETE FROM submissions WHERE activityId = ?").run(atividade)
+      db.prepare("DELETE FROM activities WHERE id = ?").run(atividade)
+      db.prepare("DELETE FROM users WHERE id = ?").run(homonimoId)
+      // O cadastro de professor com `classId` também entra em `studentIds` da
+      // turma; desfaz o rastro para não contaminar os testes seguintes.
+      const klass = db
+        .prepare("SELECT studentIds, teacherIds FROM classes WHERE id = 'c3'")
+        .get() as { studentIds: string; teacherIds: string }
+      db.prepare("UPDATE classes SET studentIds = ?, teacherIds = ? WHERE id = 'c3'").run(
+        JSON.stringify(
+          (JSON.parse(klass.studentIds) as string[]).filter((id) => id !== homonimoId),
+        ),
+        JSON.stringify(
+          (JSON.parse(klass.teacherIds) as string[]).filter((id) => id !== homonimoId),
+        ),
+      )
+    }
   })
 
   it("completion: aluno aprovado que é desativado sai de done; pct nunca passa de 100", async () => {
@@ -1412,27 +1522,32 @@ describe("Relatórios completos da coordenação (Task 4.5)", () => {
       createdAt: "10/03/2026, 12:00:00",
     })
 
-    const saldoFernanda = async (path: string) =>
-      (await getReport<PointsBodyRow[]>(coord, path)).find((r) => r.studentName === "Fernanda Costa")
-        ?.balance
-    // Antes: 50 (a5, s2/u6) + 25 da atividade nova.
-    expect(await saldoFernanda("/api/reports/points")).toBe(75)
-    expect(await saldoFernanda("/api/reports/points?subjectId=s2")).toBe(75)
-    expect(await saldoFernanda("/api/reports/points?teacherId=u6")).toBe(75)
+    try {
+      const saldoFernanda = async (path: string) =>
+        (await getReport<PointsBodyRow[]>(coord, path)).find((r) => r.studentName === "Fernanda Costa")
+          ?.balance
+      // Antes: 50 (a5, s2/u6) + 25 da atividade nova.
+      expect(await saldoFernanda("/api/reports/points")).toBe(75)
+      expect(await saldoFernanda("/api/reports/points?subjectId=s2")).toBe(75)
+      expect(await saldoFernanda("/api/reports/points?teacherId=u6")).toBe(75)
 
-    const deleted = await marcelo.delete(`/api/activities/${atividadeExcluida}`)
-    expect(deleted.status, `exclusão falhou: ${JSON.stringify(deleted.body)}`).toBe(200)
+      const deleted = await marcelo.delete(`/api/activities/${atividadeExcluida}`)
+      expect(deleted.status, `exclusão falhou: ${JSON.stringify(deleted.body)}`).toBe(200)
 
-    // Decisão 3: a exclusão não estorna pontos. O saldo e os recortes por
-    // matéria/professor continuam com os mesmos 75, e o ranking por matéria idem.
-    expect(await saldoFernanda("/api/reports/points")).toBe(75)
-    expect(await saldoFernanda("/api/reports/points?subjectId=s2")).toBe(75)
-    expect(await saldoFernanda("/api/reports/points?teacherId=u6")).toBe(75)
-    const ranking = await getReport<SubjectRankingBodyGroup[]>(coord, "/api/reports/rankings/subjects")
-    expect(
-      ranking.find((g) => g.subjectId === "s2")?.rows.find((r) => r.studentName === "Fernanda Costa")
-        ?.points,
-    ).toBe(75)
+      // Decisão 3: a exclusão não estorna pontos. O saldo e os recortes por
+      // matéria/professor continuam com os mesmos 75, e o ranking por matéria idem.
+      expect(await saldoFernanda("/api/reports/points")).toBe(75)
+      expect(await saldoFernanda("/api/reports/points?subjectId=s2")).toBe(75)
+      expect(await saldoFernanda("/api/reports/points?teacherId=u6")).toBe(75)
+      const ranking = await getReport<SubjectRankingBodyGroup[]>(coord, "/api/reports/rankings/subjects")
+      expect(
+        ranking.find((g) => g.subjectId === "s2")?.rows.find((r) => r.studentName === "Fernanda Costa")
+          ?.points,
+      ).toBe(75)
+    } finally {
+      db.prepare("DELETE FROM transactions WHERE relatedActivityId = ?").run(atividadeExcluida)
+      db.prepare("DELETE FROM activities WHERE id = ?").run(atividadeExcluida)
+    }
   })
 
   it("toCsv: BOM no início e escaping de ;, aspas e quebra de linha", () => {
@@ -1442,5 +1557,15 @@ describe("Relatórios completos da coordenação (Task 4.5)", () => {
     )
     expect(csv.charCodeAt(0)).toBe(0xfeff)
     expect(csv).toBe('\uFEFFNome;Observação\r\n"Ana; Beatriz";"Ele disse ""oi""\ne tchau"')
+  })
+
+  it("toCsv: prefixa apóstrofo em célula que começa com fórmula (OWASP CSV injection)", () => {
+    const csv = toCsv(
+      ["A", "B", "C", "D", "E"],
+      [["=1+1", "+55", "-x", "@cmd", "\tx"]],
+    )
+    // Planilha mostra o texto; não executa a fórmula. Números negativos não
+    // passam por aqui porque `escapeCsv` só prefixa `typeof value === "string"`.
+    expect(csv).toBe("\uFEFFA;B;C;D;E\r\n'=1+1;'+55;'-x;'@cmd;'\tx")
   })
 })

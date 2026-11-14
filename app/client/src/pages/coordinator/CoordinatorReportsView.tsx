@@ -432,7 +432,7 @@ export function CoordinatorReportsView() {
                 <tbody>
                   {teacherSummary.data?.map((row) => (
                     <tr
-                      key={row.teacherName}
+                      key={row.teacherId}
                       className="border-b border-gray-50 dark:border-slate-800/60 last:border-0 hover:bg-gray-50 dark:hover:bg-slate-800/40 transition-colors"
                     >
                       <th scope="row" className="px-4 py-3 text-left font-semibold text-gray-800 dark:text-slate-200">

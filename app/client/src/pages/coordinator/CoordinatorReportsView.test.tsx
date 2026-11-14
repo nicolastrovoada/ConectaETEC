@@ -137,8 +137,8 @@ const DETALHE: ActivityDetailReportRow[] = [
 ]
 
 const RESUMO_PROFESSORES: TeacherSummaryRow[] = [
-  { teacherName: "Ana Paula", activities: 1, deliveries: 0, approved: 0, late: 0, approvalPct: 0 },
-  { teacherName: "Marcelo Ferreira", activities: 1, deliveries: 10, approved: 6, late: 3, approvalPct: 60 },
+  { teacherId: "u-ana", teacherName: "Ana Paula", activities: 1, deliveries: 0, approved: 0, late: 0, approvalPct: 0 },
+  { teacherId: "u-marcelo", teacherName: "Marcelo Ferreira", activities: 1, deliveries: 10, approved: 6, late: 3, approvalPct: 60 },
 ]
 
 const RANKING_TURMAS: ClassRankingGroup[] = [

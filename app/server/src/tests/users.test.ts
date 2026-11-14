@@ -199,6 +199,23 @@ describe("Usuários (RF02, RF13)", () => {
     expect(fs.readdirSync(avatarDir()).sort()).toEqual(before)
   })
 
+  it("avatar com conteúdo desconhecido e extensão .png → 422 com a mensagem do fluxo", async () => {
+    const ana = await loginAgent(app, USERS.ana.email)
+    const before = fs.readdirSync(avatarDir()).sort()
+    // Texto puro não bate com NENHUMA assinatura conhecida: o ramo é o de
+    // conteúdo irrecuperável, não o de divergência entre extensão e conteúdo.
+    const res = await ana
+      .post("/api/users/me/avatar")
+      .attach("avatar", Buffer.from("isto nao e uma imagem"), {
+        filename: "foto.png",
+        contentType: "image/png",
+      })
+    expect(res.status).toBe(422)
+    expect(res.body.details).toBe("INVALID_FILE_CONTENT")
+    expect(res.body.error).toBe("Envie uma imagem (JPEG/PNG/WebP/GIF) para a foto de perfil.")
+    expect(fs.readdirSync(avatarDir()).sort()).toEqual(before)
+  })
+
   it("avatar acima de 2 MB → 422 LIMIT_FILE_SIZE e nada fica no disco", async () => {
     const ana = await loginAgent(app, USERS.ana.email)
     const before = fs.readdirSync(avatarDir()).sort()

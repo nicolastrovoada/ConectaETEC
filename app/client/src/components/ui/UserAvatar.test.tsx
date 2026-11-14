@@ -19,8 +19,8 @@ describe("UserAvatar", () => {
     expect(container.textContent).toBe("AS")
   })
 
-  it("cai para a letra inicial quando a imagem falha ao carregar", () => {
-    const { container } = render(
+  it("cai para a letra inicial quando a imagem falha e volta a renderizar com nova URL", () => {
+    const { container, rerender } = render(
       <UserAvatar user={{ name: "Ana Souza", avatar: "/uploads/avatars/sumiu.png" }} />,
     )
     const img = container.querySelector("img")
@@ -30,5 +30,13 @@ describe("UserAvatar", () => {
 
     expect(container.querySelector("img")).toBeNull()
     expect(container.textContent).toBe("A")
+
+    // Trocar a foto zera o estado `failed`: a URL nova precisa voltar a ser
+    // tentada, senão a letra ficaria presa para sempre mesmo com arquivo válido.
+    rerender(<UserAvatar user={{ name: "Ana Souza", avatar: "/uploads/avatars/nova.png" }} />)
+    const nova = container.querySelector("img")
+    expect(nova).not.toBeNull()
+    expect(nova?.getAttribute("src")).toBe("/uploads/avatars/nova.png")
+    expect(container.textContent).toBe("")
   })
 })

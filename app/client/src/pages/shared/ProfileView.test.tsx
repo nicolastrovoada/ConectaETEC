@@ -4,7 +4,7 @@
 // envia: nome no PATCH JSON, foto no multipart `avatar` e nenhuma chamada quando
 // a confirmação de senha diverge.
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from "vitest"
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { http, HttpResponse } from "msw"
 import { setupServer } from "msw/node"
@@ -143,20 +143,25 @@ describe("Perfil editável (4.6)", () => {
     expect(await screen.findByText("Perfil atualizado.")).toBeInTheDocument()
   })
 
-  it("envia a foto como multipart e mostra o preview", async () => {
+  it("envia a foto como multipart e mostra o preview durante o envio", async () => {
     const user = userEvent.setup()
     renderView()
 
     // O multipart é observado no wrapper `api.postForm` (no jsdom o `FormData`
     // não atravessa o fetch do Node intacto); o que importa é que a tela entregou
     // o arquivo no campo "avatar" e refletiu a URL devolvida pelo servidor.
+    // A promise fica em voo de propósito: o preview tem de aparecer ANTES da
+    // resposta, provando que ele é do arquivo escolhido, não do avatar salvo.
+    let liberarUpload: (user: SafeUser) => void = () => {}
+    const uploadPendente = new Promise<SafeUser>((resolve) => {
+      liberarUpload = resolve
+    })
     const postForm = vi.spyOn(api, "postForm").mockImplementation((async (
       _path: string,
       form: FormData,
     ) => {
       avatarForm = form
-      currentUser = { ...currentUser, avatar: "/uploads/avatars/foto-nova.png" }
-      return currentUser
+      return uploadPendente
     }) as typeof api.postForm)
 
     await user.click(await screen.findByRole("button", { name: "Editar perfil" }))
@@ -173,6 +178,17 @@ describe("Perfil editável (4.6)", () => {
     const enviado = avatarForm?.get("avatar")
     expect(enviado).toBeInstanceOf(File)
     expect((enviado as File).name).toBe("foto.png")
+
+    const preview = await screen.findByAltText("Prévia da nova foto de perfil")
+    expect(preview.getAttribute("src")).toBe("blob:preview-da-foto")
+    expect(screen.getByRole("button", { name: "Enviando foto..." })).toBeDisabled()
+
+    const salvo: SafeUser = { ...currentUser, avatar: "/uploads/avatars/foto-nova.png" }
+    currentUser = salvo
+    await act(async () => {
+      liberarUpload(salvo)
+    })
+
     expect(await screen.findByText("Foto de perfil atualizada.")).toBeInTheDocument()
 
     // Sem nome/senha pendentes, o upload fecha a edição: o próximo clique não

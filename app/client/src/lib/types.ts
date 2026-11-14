@@ -116,6 +116,7 @@ export interface ActivityDetailReportRow {
 
 /** Uma linha do resumo por professor — `GET /api/reports/teacher-summary` (4.5). */
 export interface TeacherSummaryRow {
+  teacherId: string
   teacherName: string
   activities: number
   deliveries: number

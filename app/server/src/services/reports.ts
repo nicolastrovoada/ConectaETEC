@@ -629,6 +629,15 @@ interface ActivityDetailJoinRow {
 }
 
 /**
+ * Linha interna do relatório detalhado: carrega o `teacherId` só para o resumo
+ * por professor agrupar homônimos por identidade. O payload público de
+ * `activity-detail` continua sem esse campo (contrato da 4.5).
+ */
+interface ActivityDetailInternalRow extends ActivityDetailRow {
+  teacherId: string
+}
+
+/**
  * `GET /api/reports/activity-detail` (4.5) — uma linha por atividade ativa e
  * não excluída, com as contagens de entrega no período.
  *
@@ -637,6 +646,28 @@ interface ActivityDetailJoinRow {
  * filtro — nunca comparação textual do formato brasileiro.
  */
 export function activityDetailReport(filters: ReportFilters = {}): ActivityDetailRow[] {
+  // O `teacherId` existe só na linha interna: `teacher-summary` precisa dele
+  // para não fundir dois professores homônimos, mas o contrato público da 4.5
+  // não o expõe aqui.
+  return activityDetailRows(filters).map((row) => ({
+    activityId: row.activityId,
+    title: row.title,
+    type: row.type,
+    subject: row.subject,
+    className: row.className,
+    teacherName: row.teacherName,
+    deadline: row.deadline,
+    createdAt: row.createdAt,
+    deliveries: row.deliveries,
+    approved: row.approved,
+    rejected: row.rejected,
+    pending: row.pending,
+    late: row.late,
+    donePct: row.donePct,
+  }))
+}
+
+function activityDetailRows(filters: ReportFilters = {}): ActivityDetailInternalRow[] {
   const db = getDb()
   const where = ["a.status = 'active'", "a.deletedAt IS NULL"]
   const params: string[] = []
@@ -684,6 +715,7 @@ export function activityDetailReport(filters: ReportFilters = {}): ActivityDetai
       subject: row.subject,
       className: row.className,
       teacherName: row.teacherName ?? row.teacherId,
+      teacherId: row.teacherId,
       deadline: row.deadline,
       createdAt: row.createdAt,
       deliveries,
@@ -698,6 +730,7 @@ export function activityDetailReport(filters: ReportFilters = {}): ActivityDetai
 
 /** Uma linha do resumo por professor (conclusão e atraso agregados). */
 export interface TeacherSummaryRow {
+  teacherId: string
   teacherName: string
   activities: number
   deliveries: number
@@ -710,28 +743,39 @@ export interface TeacherSummaryRow {
 /**
  * `GET /api/reports/teacher-summary` (4.5) — conclusão e atraso POR PROFESSOR.
  *
- * Reutiliza `activityDetailReport` (mesmos filtros, mesmo período e mesmo
- * recorte de atividade ativa/não excluída) e agrega em memória por
- * `teacherName`. Não há SQL próprio de propósito: duplicar o WHERE faria os
- * dois relatórios divergirem com o tempo. Ordenação por nome em pt-BR.
+ * Reutiliza a mesma linha de `activity-detail` (mesmos filtros, mesmo período e
+ * mesmo recorte de atividade ativa/não excluída) e agrega em memória por
+ * `teacherId`. O id — não o nome — é a chave: dois professores homônimos são
+ * duas linhas com somas separadas. Ordenação por nome em pt-BR, com o id como
+ * desempate determinístico.
  */
 export function teacherSummaryReport(filters: ReportFilters = {}): TeacherSummaryRow[] {
-  const byTeacher = new Map<string, Omit<TeacherSummaryRow, "teacherName" | "approvalPct">>()
-  for (const row of activityDetailReport(filters)) {
-    const acc = byTeacher.get(row.teacherName) ?? { activities: 0, deliveries: 0, approved: 0, late: 0 }
+  const byTeacher = new Map<string, Omit<TeacherSummaryRow, "approvalPct">>()
+  for (const row of activityDetailRows(filters)) {
+    const acc = byTeacher.get(row.teacherId) ?? {
+      teacherId: row.teacherId,
+      teacherName: row.teacherName,
+      activities: 0,
+      deliveries: 0,
+      approved: 0,
+      late: 0,
+    }
     acc.activities += 1
     acc.deliveries += row.deliveries
     acc.approved += row.approved
     acc.late += row.late
-    byTeacher.set(row.teacherName, acc)
+    byTeacher.set(row.teacherId, acc)
   }
-  return [...byTeacher.entries()]
-    .map(([teacherName, acc]) => ({
-      teacherName,
+  return [...byTeacher.values()]
+    .map((acc) => ({
       ...acc,
       approvalPct: acc.deliveries === 0 ? 0 : Math.round((acc.approved / acc.deliveries) * 100),
     }))
-    .sort((a, b) => a.teacherName.localeCompare(b.teacherName, "pt-BR", { sensitivity: "base" }))
+    .sort(
+      (a, b) =>
+        a.teacherName.localeCompare(b.teacherName, "pt-BR", { sensitivity: "base" }) ||
+        a.teacherId.localeCompare(b.teacherId),
+    )
 }
 
 export interface ClassRankingRow {
@@ -947,7 +991,13 @@ export function subjectRankingsReport(filters: ReportFilters = {}): SubjectRanki
 }
 
 function escapeCsv(value: string | number): string {
-  const s = String(value)
+  let s = String(value)
+  // OWASP CSV injection: Excel/Sheets interpretam `=`, `+`, `-`, `@`, TAB e CR
+  // no início da célula como fórmula/comando. O apóstrofo força texto; só
+  // strings entram aqui (números negativos continuam números).
+  if (typeof value === "string" && /^[=+\-@\t\r]/.test(s)) {
+    s = `'${s}`
+  }
   if (s.includes(";") || s.includes('"') || s.includes("\n") || s.includes("\r")) {
     return `"${s.replaceAll('"', '""')}"`
   }
