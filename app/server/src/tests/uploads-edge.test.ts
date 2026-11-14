@@ -151,6 +151,57 @@ describe("Upload de evidências — casos de borda", () => {
     expect(fs.existsSync(path.join(config.uploadsDir, firstAtt.storedName))).toBe(false)
   })
 
+  it("anexo de entrega de atividade excluída → 403 para todos, com auditoria (C4)", async () => {
+    const db = prepareDb()
+    createActivity(db, {
+      id: "a-c4",
+      title: "Atividade que será excluída",
+      teacherId: USERS.marcelo.id,
+      classId: "c1",
+    })
+    // Controle: uma atividade VIVA no mesmo cenário, para provar que o 403 não
+    // é o comportamento genérico da rota.
+    createActivity(db, {
+      id: "a-c4-viva",
+      title: "Atividade que continua viva",
+      teacherId: USERS.marcelo.id,
+      classId: "c1",
+    })
+
+    const ana = await loginAgent(app, USERS.ana.email)
+    const enviar = async (activityId: string): Promise<string> => {
+      const res = await ana
+        .post(`/api/activities/${activityId}/submissions`)
+        .field("comment", `entrega de ${activityId}`)
+        .attach("attachments", pngFile(`anexo-${activityId}`), `${activityId}.png`)
+      expect(res.status).toBe(201)
+      return (res.body.data.attachments[0] as { storedName: string }).storedName
+    }
+    const excluida = await enviar("a-c4")
+    const viva = await enviar("a-c4-viva")
+
+    const marcelo = await loginAgent(app, USERS.marcelo.email)
+    const deleted = await marcelo.delete("/api/activities/a-c4")
+    expect(deleted.status, `exclusão falhou: ${JSON.stringify(deleted.body)}`).toBe(200)
+
+    const coord = await loginAgent(app, USERS.juliana.email)
+    for (const agent of [coord, ana, marcelo]) {
+      const res = await agent.get(`/uploads/${excluida}`)
+      expect(res.status, `anexo de atividade excluída foi servido para ${JSON.stringify(res.body)}`).toBe(403)
+    }
+
+    const negadas = (await coord.get("/api/audit?action=ACCESS_DENIED")).body.data as Array<{
+      entityId: string
+    }>
+    expect(
+      negadas.some((l) => l.entityId === `/uploads/${excluida}`),
+      `sem ACCESS_DENIED para o anexo excluído: ${JSON.stringify(negadas)}`,
+    ).toBe(true)
+
+    // O anexo da atividade viva continua acessível ao responsável.
+    expect((await coord.get(`/uploads/${viva}`)).status).toBe(200)
+  })
+
   it("reenvio SEM anexo mantém os anexos existentes", async () => {
     const ana = await setupAna()
     const marcelo = await loginAgent(app, USERS.marcelo.email)

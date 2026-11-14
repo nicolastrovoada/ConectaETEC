@@ -93,20 +93,22 @@ function canReadSubmissionFile(
   db: ReturnType<typeof getDb>,
   origin: SubmissionFile,
 ): boolean {
+  // Atividade excluída (soft delete) é invisível — e o anexo de uma entrega
+  // dela também. A consulta vem ANTES dos branches de papel de propósito:
+  // coordenação e aluno autor recebem o mesmo 403 (o call site audita), porque
+  // o recurso excluído sai do ar para todos. A coordenação continua vendo a
+  // atividade na aba "Excluídas" e, se restaurá-la, o anexo volta a ser servido.
+  const activity = db
+    .prepare("SELECT teacherId, deletedAt FROM activities WHERE id = ?")
+    .get(origin.activityId) as { teacherId: string; deletedAt: string | null } | undefined
+  if (!activity || activity.deletedAt !== null) return false
+
   if (user.role === "coordinator") return true
   if (user.role === "student") return origin.studentId === user.id
   // Professor e funcionário: só o responsável pela atividade da entrega — é o
   // mesmo isolamento por dono de `canViewSubmission` e das listagens (2.5):
   // atender a turma não abre o arquivo de um colega.
-  //
-  // Pendência conhecida (fora do escopo desta tarefa, C4): a consulta abaixo não
-  // filtra `deletedAt`, então o anexo de uma entrega de atividade EXCLUÍDA
-  // continua sendo servido ao responsável. A decisão do humano é esconder
-  // (`AND deletedAt IS NULL` + 403), em task própria.
-  const activity = db.prepare("SELECT teacherId FROM activities WHERE id = ?").get(origin.activityId) as
-    | { teacherId: string }
-    | undefined
-  return activity?.teacherId === user.id
+  return activity.teacherId === user.id
 }
 
 /**
