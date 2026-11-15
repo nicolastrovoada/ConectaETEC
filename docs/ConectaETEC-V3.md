@@ -1,7 +1,7 @@
 # Conecta ETEC — V3 (Plano Vivo de Evolução)
 
 - **Data de início:** 24/09/2026
-- **Status geral:** `EM VERIFICAÇÃO FINAL` — fases 1–4 concluídas; F.1 (este resumo) concluída; F.2 (regressão final) pendente. Plano de implementação: `docs/superpowers/plans/2026-09-24-conectaetec-v3.md`
+- **Status geral:** `CONCLUÍDO` — fases 1–4, dois rounds de limpeza e a revisão final (F.1 + F.2) concluídos. Plano de implementação: `docs/superpowers/plans/2026-09-24-conectaetec-v3.md`
 - **Propósito:** este documento é o **registro vivo** da evolução V3 do app. Ele será atualizado a cada fase cumprida e, ao término, transformado no **relatório-resumo das ações realizadas na V3**.
 
 > ⚠️ **Continuidade:** se o processo for interrompido, este arquivo contém todo o escopo, decisões, fases e o progresso. Para retomar, leia a seção [Progresso](#progresso-e-status) e continue a partir da fase pendente.
@@ -138,7 +138,7 @@ Evoluir o Conecta ETEC (app em `D:\ConectaETEC\app`) para um cenário mais fiel 
 - **Frontend:** testes dos filtros ocultos de validação, formulários de atividade/reforço/aviso, painel Minha Turma.
 - **Final:** `npm run build`, lint/typecheck no client e server; banca `web-qa` por laço funcional.
 - **Regressão:** RF01–RF14 e RN01–RN06 devem seguir verdes (checklist do `tcc-reviewer`).
-- **Resultado em 11/11/2026 (pré-F.2):** `npm run typecheck` exit 0; **409 testes de servidor (28 arquivos)** e **246 de client (21 arquivos)** verdes; `npm run build` exit 0. A regressão manual com os 4 papéis é o escopo da F.2.
+- **Resultado em 14/11/2026 (F.2):** `npm run typecheck` exit 0; **409 testes de servidor (28 arquivos)** e **246 de client (21 arquivos)** verdes; `npm run build` exit 0. Regressão funcional via API contra servidor real + banco semeado: **42/42 verificações** com os 4 papéis (login, listas, relatórios/CSV, auditoria, perfil, atividade, entrega, aprovação, atraso, reforço, aviso, avatar e isolamento por dono).
 
 ---
 
@@ -151,7 +151,7 @@ Evoluir o Conecta ETEC (app em `D:\ConectaETEC\app`) para um cenário mais fiel 
 | 3 — Reforço e notificações | ✅ Concluída | Tasks 3.1–3.5: reforço escolar real (lição, anexos, verificação, +5 único), telas de aluno/professor, notificações transitórias vs. persistentes e avisos da coordenação |
 | 4 — Validação, painéis, relatórios, auditoria, perfil | ✅ Concluída | Tasks 4.1–4.7: filtros ocultos de validação, Minha Turma, desempenho do professor isolado, relatório da coordenação com CSV, auditoria com hora/filtros/reset, perfil editável e coordenação com filtros completos |
 | Round de limpeza pós-fase 4 | ✅ Parcial (2 rounds) | Round 1: dívidas de 4.5–4.7 (teacher-summary por id, CSV anti-injection, resíduos de teste). Round 2: **C4** resolvido, **RN06** auditado, busca de usuários sem acento, roster de professor em `teacherIds` e limpeza de auditoria/CSV nos testes. Restam ~40 *minors* antigos e o M-6 (N+1 do CSV) |
-| Revisão final + resumo V3 | 🚧 Em andamento | F.1 ✅ (este documento); F.2 (regressão final QA) pendente |
+| Revisão final + resumo V3 | ✅ Concluída | F.1 ✅ (este documento); F.2 ✅ (gates verdes + regressão funcional 42/42 com os 4 papéis) |
 
 > **Dívidas em aberto registradas no ledger** (`app/.superpowers/sdd/2026-09-24-conectaetec-v3/progress.md`):
 > o ledger acumulou **~40 *minors*** das fases 1–3 (comentários que o código não cumpre, helpers duplicados, asserções fracas, regra de posse escrita à mão em 4 lugares), além de **M-6** (N+1 do ramo CSV em `routes/classes.ts`), **C1** (divergência u6/c3 — ver §7.4), endurecimento do avatar (atomicidade/resize/EXIF), `preselectActivityId` de outra matéria e os 4 *minors* da review do round 2 (2 JSDoc/comentários desatualizados + 2 coberturas de teste). **C4 está resolvido** no round 2: `/uploads/:storedName` esconde (403 + auditoria) anexo de atividade soft-deletada para todos os papéis.
@@ -207,9 +207,9 @@ Evoluir o Conecta ETEC (app em `D:\ConectaETEC\app`) para um cenário mais fiel 
 
 ### 7.3 Qualidade e verificação
 
-- Suíte automatizada ao final da F.1: **409 testes de servidor (28 arquivos)** e **246 de client (21 arquivos)**, `npm run typecheck` e `npm run build` verdes.
+- Suíte automatizada ao final da F.2: **409 testes de servidor (28 arquivos)** e **246 de client (21 arquivos)**, `npm run typecheck` e `npm run build` verdes.
 - Cada task passou por implementer + review independente, com fix rounds quando necessário; as reviews e relatórios ficam em `app/.superpowers/sdd/2026-09-24-conectaetec-v3/`.
-- A regressão manual dos 4 papéis (login, entrega, aprovação, atraso, reforço, aviso, relatório, auditoria, perfil) é a F.2 e fecha o plano.
+- F.2 executada em 14/11/2026 contra o servidor real e banco semeado (`qa-v3.db`): **42/42 verificações** cobrindo os 4 papéis — login, listas de usuários/turmas, relatórios com CSV, auditoria paginada/busca/período, perfil (nome e foto), criação e envio de atividade, aprovação com crédito de 10 pontos, entrega atrasada com `ceil(10/2)=5`, reforço com +5 único e bloqueio de duplicidade, aviso da coordenação, isolamento de professor/funcionário (403 + auditoria) e bloqueio de validação alheia. O plano está fechado.
 
 ### 7.4 Pendências deixadas ao responsável
 
