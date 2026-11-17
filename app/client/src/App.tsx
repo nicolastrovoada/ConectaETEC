@@ -8,12 +8,14 @@ import { NotificationsProvider } from "./context/NotificationsContext"
 import { ToastHost } from "./components/ui/Toast"
 import { Spinner } from "./components/ui/EmptyState"
 import { LoginPage } from "./pages/LoginPage"
+import { LandingPage } from "./pages/LandingPage"
 import { StudentDashboard } from "./pages/student/StudentDashboard"
 import { TeacherDashboard } from "./pages/teacher/TeacherDashboard"
 import { StaffDashboard } from "./pages/staff/StaffDashboard"
 import { CoordinatorDashboard } from "./pages/coordinator/CoordinatorDashboard"
 
 type SessionState = "loading" | SafeUser | null
+type PublicView = "landing" | "login"
 
 export default function App() {
   return (
@@ -27,6 +29,7 @@ export default function App() {
 
 function AppGate() {
   const [session, setSession] = useState<SessionState>("loading")
+  const [publicView, setPublicView] = useState<PublicView>("landing")
 
   useEffect(() => {
     api
@@ -51,12 +54,17 @@ function AppGate() {
   if (session === null) {
     return (
       <>
-        <LoginPage
-          onLogin={async (email, password) => {
-            const user = await api.post<SafeUser>("/api/auth/login", { email, password })
-            setSession(user)
-          }}
-        />
+        {publicView === "login" ? (
+          <LoginPage
+            onLogin={async (email, password) => {
+              const user = await api.post<SafeUser>("/api/auth/login", { email, password })
+              setSession(user)
+            }}
+            onBack={() => setPublicView("landing")}
+          />
+        ) : (
+          <LandingPage onRequestLogin={() => setPublicView("login")} />
+        )}
         <ToastHost />
       </>
     )
@@ -64,6 +72,7 @@ function AppGate() {
 
   function handleLogout() {
     setSession(null)
+    setPublicView("landing")
   }
 
   return (

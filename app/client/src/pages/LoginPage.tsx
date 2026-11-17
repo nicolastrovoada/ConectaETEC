@@ -11,9 +11,10 @@ const DEMO_ACCOUNTS: { role: Role; email: string }[] = [
 
 interface LoginPageProps {
   onLogin: (email: string, password: string) => Promise<void>
+  onBack?: () => void
 }
 
-export function LoginPage({ onLogin }: LoginPageProps) {
+export function LoginPage({ onLogin, onBack }: LoginPageProps) {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [submitting, setSubmitting] = useState(false)
@@ -47,6 +48,16 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       />
 
       <div className="relative w-full max-w-md">
+        {onBack ? (
+          <button
+            type="button"
+            onClick={onBack}
+            className="mb-4 inline-flex min-h-11 items-center rounded-lg px-1 text-sm font-semibold text-blue-200 transition-colors hover:text-white"
+          >
+            Voltar para a apresentação
+          </button>
+        ) : null}
+
         <div className="text-center mb-7">
           <div className="inline-flex items-center gap-2 mb-2">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-black text-lg">
