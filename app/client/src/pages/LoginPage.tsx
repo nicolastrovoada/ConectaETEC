@@ -2,13 +2,6 @@ import { useState, type FormEvent } from "react"
 import { ROLE_ICONS, ROLE_LABELS, type Role } from "@shared/types"
 import { Spinner } from "../components/ui/EmptyState"
 
-const DEMO_ACCOUNTS: { role: Role; email: string }[] = [
-  { role: "student", email: "ana@etec.sp.gov.br" },
-  { role: "teacher", email: "marcelo@etec.sp.gov.br" },
-  { role: "staff", email: "carlos@etec.sp.gov.br" },
-  { role: "coordinator", email: "juliana@etec.sp.gov.br" },
-]
-
 interface LoginPageProps {
   onLogin: (email: string, password: string) => Promise<void>
   onBack?: () => void
@@ -126,29 +119,6 @@ export function LoginPage({ onLogin, onBack }: LoginPageProps) {
                 {submitting ? <Spinner className="border-white" /> : null}
                 {submitting ? "Entrando..." : "Entrar na plataforma →"}
               </button>
-
-              <div className="pt-3 border-t border-gray-100 dark:border-slate-800">
-                <p className="text-xs text-gray-500 dark:text-slate-400 text-center mb-2.5">
-                  Demonstração — senha de todos os perfis: <strong className="text-gray-700 dark:text-slate-200">123456</strong>
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  {DEMO_ACCOUNTS.map((demo) => (
-                    <button
-                      key={demo.role}
-                      type="button"
-                      onClick={() => {
-                        setEmail(demo.email)
-                        setPassword("123456")
-                        setError("")
-                      }}
-                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-slate-700 text-xs font-semibold text-gray-600 dark:text-slate-300 hover:border-blue-300 hover:bg-blue-50 dark:hover:bg-slate-800 transition-all"
-                    >
-                      <span aria-hidden="true">{ROLE_ICONS[demo.role]}</span>
-                      {ROLE_LABELS[demo.role]}
-                    </button>
-                  ))}
-                </div>
-              </div>
             </form>
           </div>
         </div>
