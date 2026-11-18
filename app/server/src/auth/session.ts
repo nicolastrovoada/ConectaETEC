@@ -43,13 +43,10 @@ function decodeClaims(token: string): SessionClaims | null {
 
 function ensureLocalSession(token: string, claims: SessionClaims): void {
   const db = getDb()
-  const session = db.prepare("SELECT token FROM sessions WHERE token = ?").get(token)
-  if (!session) {
-    db.prepare(
-      "INSERT OR IGNORE INTO sessions (token, userId, createdAt, expiresAt) VALUES (?, ?, ?, ?)",
-    ).run(token, claims.u, claims.iat, claims.exp)
-  }
-  const user = db.prepare("SELECT id FROM users WHERE id = ?").get(claims.u)
+  let user = db.prepare("SELECT id FROM users WHERE id = ? OR email = ?").get(
+    claims.u,
+    claims.user.email,
+  ) as { id: string } | undefined
   if (!user) {
     const snapshot = claims.user
     db.prepare(
@@ -66,6 +63,17 @@ function ensureLocalSession(token: string, claims: SessionClaims): void {
       JSON.stringify(snapshot.classIds),
       snapshot.createdAt,
     )
+    user = db.prepare("SELECT id FROM users WHERE id = ? OR email = ?").get(
+      snapshot.id,
+      snapshot.email,
+    ) as { id: string } | undefined
+  }
+  if (!user) return
+  const session = db.prepare("SELECT token FROM sessions WHERE token = ?").get(token)
+  if (!session) {
+    db.prepare(
+      "INSERT OR IGNORE INTO sessions (token, userId, createdAt, expiresAt) VALUES (?, ?, ?, ?)",
+    ).run(token, user.id, claims.iat, claims.exp)
   }
 }
 

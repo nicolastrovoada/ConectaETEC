@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeAll } from "vitest"
 import request from "supertest"
 import { makeApp, prepareDb, loginAgent, USERS } from "./helpers"
-import { getDb } from "../db/connection"
+import { getDb, resetDb } from "../db/connection"
+import { runSchema } from "../db/schema"
+import { getSessionUser } from "../auth/session"
 import type { Express } from "express"
 
 describe("Autenticação (RF01, RN01)", () => {
@@ -88,6 +90,31 @@ describe("Autenticação (RF01, RN01)", () => {
     const res = await agent.get("/api/auth/me")
     expect(res.status).toBe(200)
     expect(res.body.data.id).toBe(USERS.ana.id)
+  })
+
+  it("sessão assinada usa o usuário local com o mesmo e-mail quando o id mudou", async () => {
+    const login = await request(app).post("/api/auth/login").send({
+      email: USERS.ana.email,
+      password: USERS.ana.password,
+    })
+    const raw = (login.headers["set-cookie"] as unknown as string[]).find((c) => c.startsWith("sid="))!
+    const token = raw.match(/sid=([^;]+)/)![1]
+
+    resetDb()
+    const db = getDb()
+    runSchema(db)
+    db.prepare(
+      `INSERT INTO users (id, name, email, password, role, active, avatar, classIds, createdAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run("u1-outra-instancia", "Ana Local", USERS.ana.email, "hash", "student", 1, "A", "[]", "01/08/2026")
+
+    try {
+      const user = getSessionUser(token)
+      expect(user?.email).toBe(USERS.ana.email)
+      expect(user?.id).toBe("u1-outra-instancia")
+    } finally {
+      prepareDb()
+    }
   })
 
   it("cookie assinado adulterado é rejeitado", async () => {
