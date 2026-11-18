@@ -18,6 +18,7 @@ export const config = {
   port: Number(process.env.PORT ?? 4000),
   corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:5173",
   cookieName: "sid",
+  sessionSecret: process.env.SESSION_SECRET ?? "conecta-etec-dev-secret-change-me",
   secureCookies: process.env.NODE_ENV === "production",
   sessionTtlMs: 8 * 60 * 60 * 1000, // ~8h
   dataDir: process.env.DATA_DIR

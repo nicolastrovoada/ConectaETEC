@@ -79,6 +79,29 @@ describe("Autenticação (RF01, RN01)", () => {
     expect(res.body.data.id).toBe(USERS.ana.id)
   })
 
+  it("sessão sobrevive a uma nova instância com banco local vazio", async () => {
+    const agent = await loginAgent(app, USERS.ana.email)
+    expect((await agent.get("/api/auth/me")).status).toBe(200)
+
+    prepareDb()
+
+    const res = await agent.get("/api/auth/me")
+    expect(res.status).toBe(200)
+    expect(res.body.data.id).toBe(USERS.ana.id)
+  })
+
+  it("cookie assinado adulterado é rejeitado", async () => {
+    const login = await request(app).post("/api/auth/login").send({
+      email: USERS.ana.email,
+      password: USERS.ana.password,
+    })
+    const raw = (login.headers["set-cookie"] as unknown as string[]).find((c) => c.startsWith("sid="))!
+    const token = raw.match(/sid=([^;]+)/)![1]
+    const tampered = token.slice(0, -1) + (token.endsWith("a") ? "b" : "a")
+    const denied = await request(app).get("/api/auth/me").set("Cookie", `sid=${tampered}`)
+    expect(denied.status).toBe(401)
+  })
+
   it("logout revoga a sessão", async () => {
     const agent = await loginAgent(app, USERS.ana.email)
     const logout = await agent.post("/api/auth/logout")
