@@ -158,7 +158,9 @@ export function runMigrations(db: DatabaseSync, migrations: Migration[] = MIGRAT
           // inocente e o operador precisa saber disso, não ler "culpa da 004".
           throw new ForeignKeyViolationError(migration.version, migration.name, after, { preExisting: true })
         }
-        db.prepare("INSERT INTO schema_migrations (version, name, appliedAt) VALUES (?, ?, ?)").run(
+        db.prepare(
+          "INSERT OR IGNORE INTO schema_migrations (version, name, appliedAt) VALUES (?, ?, ?)",
+        ).run(
           migration.version,
           migration.name,
           new Date().toISOString(),
