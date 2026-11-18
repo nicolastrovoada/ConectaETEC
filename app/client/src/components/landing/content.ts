@@ -88,7 +88,6 @@ export const A11Y = {
 }
 
 export const HEADER = {
-  loginLabel: "Fazer login",
   accessLabel: "Entrar na conta",
   accessShortLabel: "Entrar",
 }

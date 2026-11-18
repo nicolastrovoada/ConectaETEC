@@ -17,7 +17,7 @@
 - Identidade preservada: azul `#1a4fa0` + navy `#0d2d6b`, Nunito (títulos) e Inter (corpo), gradientes por papel já existentes em `ROLE_THEME`.
 - Conceito visual: **“caderno + rede”** — malha de pontos discreta (caderno escolar) e trilhas com nós (conexão entre pessoas). Sem bibliotecas de ícones, sem imagens de `/uploads`.
 - Ritmo: hero navy (único momento de impacto), alternância entre papel, tinta clara e dois blocos navy (Perfis e Contato), fechando no rodapé tinta.
-- Dois CTAs de acesso no topo, ambos abrindo o login existente; nenhuma credencial de teste é exibida.
+- Um CTA de acesso no topo, abrindo o login existente; nenhuma credencial de teste é exibida.
 
 ---
 
@@ -270,7 +270,6 @@ Regras duras:
       6 links (≥ 44px de altura)
     </nav>
     <div class="ml-auto flex items-center gap-2">
-      [Fazer login]      ← Button secondary (com borda)
       [Entrar na conta]  ← Button primary (azul)
       [Menu]             ← lg:hidden · aria-expanded
     </div>
@@ -281,7 +280,7 @@ Regras duras:
 
 - Fundo **sempre sólido**: `bg-white/95 dark:bg-slate-950/95 backdrop-blur border-b border-slate-200 dark:border-slate-800`.
 - Altura 64px no mobile e 72px em `lg`. O header **não** sobrepõe o hero (o hero começa abaixo).
-- Ordem dos botões: secundário à esquerda, primário à direita (primário mais próximo da borda).
+- Botão de acesso alinhado à direita; o menu aparece depois dele no mobile.
 - Nav: `text-sm font-semibold text-slate-600 hover:text-[#1a4fa0]`. `aria-current` (scrollspy) é P2 e não bloqueia a entrega.
 - Wordmark em §7.2: “Conecta” navy + “ETEC” azul; em dark, “Conecta” branco + “ETEC” `blue-300`.
 
@@ -294,24 +293,23 @@ Regras duras:
 
 ### 4.3 Header no mobile (a partir de 320px)
 
-Os dois acessos continuam no topo; o menu compacto é adicional, não substituto.
+O acesso continua no topo; o menu compacto é adicional, não substituto.
 
 | Elemento | 320–399 | 400–639 | ≥ 640 |
 |---|---|---|---|
 | Marca | só o símbolo (28px) | símbolo + “ConectaETEC” | símbolo + texto |
-| “Fazer login” | `text-xs px-2.5 min-h-10` | idem | `text-sm px-4 py-2.5` |
 | “Entrar na conta” | rótulo “Entrar” + `aria-label="Entrar na conta"` | “Entrar” | rótulo completo |
 | Menu | botão 40×40 com ícone `menu`/`close` | idem | oculto |
 
-Cálculo para 320px: 28 (marca) + 8 + 86 (“Fazer login”) + 8 + 62 (“Entrar”) + 8 + 40 (menu) + 40 (padding) ≈ 280px → cabe.
+Cálculo para 320px: 28 (marca) + 8 + 62 (“Entrar”) + 8 + 40 (menu) + 40 (padding) ≈ 186px → cabe.
 
 ### 4.4 Menu mobile
 
 - Painel **não modal** (disclosure): `absolute left-0 right-0 top-full bg-white dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 shadow-[var(--landing-shadow-float)] max-h-[calc(100dvh-4rem)] overflow-y-auto`.
-- Conteúdo: os 6 links (cada um `py-3.5` → ≥ 44px, `text-base font-semibold`), separador `border-t`, e então **as duas CTAs em largura total** (primária primeiro). Isso garante o acesso mesmo se o header ficar apertado.
+- Conteúdo: os 6 links (cada um `py-3.5` → ≥ 44px, `text-base font-semibold`), separador `border-t`, e então **a CTA de acesso em largura total**. Isso garante o acesso mesmo se o header ficar apertado.
 - Interação: `aria-expanded` + `aria-controls="menu-landing"`; ao abrir, foco no primeiro link; `Escape` fecha e devolve o foco ao botão; clicar em link ou CTA fecha; **sem focus trap** (não é modal), mas o painel vem imediatamente após o botão no DOM.
 - Sem backdrop preto: o painel não cobre o conteúdo.
-- Ambos os botões do painel chamam `onRequestLogin`.
+- O botão do painel chama `onRequestLogin`.
 
 ---
 
@@ -360,7 +358,7 @@ Fundo: gradiente do §2.2 + malha branca a 6% + dois anéis `border-white/10`.
 ```
 DESKTOP
 ┌────────────────────────────────────────────────────────────────────┐
-│ ◯ ConectaETEC                    Início Sobre ... [Fazer login][Entrar] │
+│ ◯ ConectaETEC                    Início Sobre ...        [Entrar]      │
 ├────────────────────────────────────────────────────────────────────┤
 │ · · · · malha · · · ·                   ╭──────────────────────╮   │
 │ —• Conectando o futuro.                 │ painel “Início”      │   │
@@ -909,7 +907,7 @@ Regras:
 ```tsx
 // pages/LandingPage.tsx
 export interface LandingPageProps {
-  /** Abre o LoginPage existente (mesma ação dos dois botões do header). */
+  /** Abre o LoginPage existente (mesma ação do botão do header). */
   onRequestLogin: () => void
 }
 export function LandingPage({ onRequestLogin }: LandingPageProps)
@@ -1108,8 +1106,8 @@ Marcar todos antes de considerar a landing pronta.
 - [ ] Azul `#1a4fa0` é a cor de ação/identidade; navy `#0d2d6b` é profundidade; Nunito em títulos e Inter no corpo, sem reimportar fontes.
 
 **Header e navegação**
-- [ ] “Fazer login” e “Entrar na conta” existem, estão no canto superior direito e ambos chamam `onRequestLogin`.
-- [ ] Os dois CTAs são visíveis e clicáveis em 320px, 768px e 1440px.
+- [ ] “Entrar na conta” existe, está no canto superior direito e chama `onRequestLogin`; não há “Fazer login” duplicado.
+- [ ] O CTA é visível e clicável em 320px, 768px e 1440px, inclusive no menu mobile.
 - [ ] Header sticky, sólido, sem mudança de cor no scroll; âncoras não ficam sob o header (`scroll-margin-top`).
 - [ ] Menu mobile abre/fecha por teclado, fecha com `Escape` e devolve o foco; links têm ≥ 44px de altura.
 - [ ] Skip link visível no foco e leva ao conteúdo.

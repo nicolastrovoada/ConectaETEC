@@ -24,7 +24,7 @@
 4. **Transparência sobre o estágio.** A página informa que se trata de um protótipo funcional em evolução e que não há cadastro público, login institucional, integração acadêmica oficial nem endereço público de demonstração.
 5. **Linguagem acessível.** Frases curtas, voz ativa, termos técnicos explicados na primeira ocorrência. O visitante não precisa saber programar para entender a página.
 6. **Origem sem estatística.** A história do projeto é apresentada como vivência escolar e observação do cotidiano, nunca como pesquisa estatística ou entrevista formal.
-7. **Acesso coerente.** "Fazer login" e "Entrar na conta" levam ao mesmo fluxo de autenticação já existente. Não há cadastro público nem segunda tela de login.
+7. **Acesso coerente.** "Entrar na conta" abre o fluxo de autenticação já existente. Não há cadastro público, segunda tela de login nem segundo CTA de acesso.
 
 ## Mapa de seções e âncoras
 
@@ -50,7 +50,7 @@
 - "Sobre o projeto" ancora em `#sobre`, no início da seção de problema; a seção de solução vem em seguida, no mesmo bloco narrativo.
 - "Desenvolvimento" ancora em `#desenvolvimento`; tecnologia e estado atual vêm logo depois, sem item próprio no menu.
 - `scroll-margin-top` deve compensar o cabeçalho fixo (sticky).
-- A página é pública e aparece para visitantes sem sessão. O fluxo atual do cliente renderiza a tela de login quando não há sessão (`app/client/src/App.tsx`), portanto os botões de acesso devem abrir essa mesma tela, sem criar rota, tela ou cadastro novos.
+- A página é pública e aparece para visitantes sem sessão. O fluxo atual do cliente renderiza a tela de login quando não há sessão (`app/client/src/App.tsx`), portanto o botão de acesso deve abrir essa mesma tela, sem criar rota, tela ou cadastro novos.
 
 ---
 
@@ -69,10 +69,9 @@
 - Desenvolvimento
 - Contato
 
-**Botões:**
+**Botão:**
 
-- Primário: **Fazer login**
-- Secundário: **Entrar na conta**
+- Único: **Entrar na conta** (rótulo compacto **Entrar** no celular, com `aria-label="Entrar na conta"`)
 
 **Rótulos acessíveis do menu móvel:**
 
@@ -83,12 +82,12 @@
 
 ### Notas de implementação (não publicar)
 
-- Os dois botões têm o mesmo destino: o fluxo de autenticação existente. A diferença é apenas visual (primário e secundário). Não criar cadastro público, nem segunda página de autenticação, nem novo estado de sessão.
-- No celular, os dois botões devem permanecer visíveis ou acessíveis no menu compacto; não esconder o acesso atrás de rolagem.
+- O botão de acesso leva ao fluxo de autenticação existente. Não criar cadastro público, segunda página de autenticação, novo estado de sessão nem segundo CTA de acesso.
+- No celular, o botão deve permanecer visível no cabeçalho e repetido no menu compacto; não esconder o acesso atrás de rolagem.
 - Usar `aria-expanded` e `aria-controls` no botão do menu móvel, com foco gerenciado ao abrir e fechar (mesmo padrão já usado em `app/client/src/components/Layout.tsx`).
 - O cabeçalho pode ser fixo (sticky), com fundo sólido ou com transparência apenas quando o contraste do texto estiver garantido.
 - A marca é tipográfica ("Conecta" + "ETEC" com diferenciação de cor), como na tela de login. Não existe arquivo de logotipo no repositório: não referenciar imagem inexistente.
-- Rótulos de botão são idênticos nos dois tamanhos de tela; não trocar por "Entrar" no celular, para manter consistência e clareza.
+- No celular, o rótulo visível é "Entrar" para caber em 320px; o nome acessível permanece "Entrar na conta" via `aria-label`.
 
 ---
 
@@ -669,8 +668,7 @@ Destino: `https://github.com/nicolastrovoada/ConectaETEC/issues`
 | Tabela de níveis | `<caption>` "Níveis e faixas de pontos" e cabeçalhos "Nível" e "Faixa de pontos" |
 | Link do GitHub | Texto visível "Acompanhar o projeto no GitHub"; leitura complementar "(abre em nova aba)" |
 | Link de issues | Texto visível "Abrir uma issue no repositório"; leitura complementar "(abre em nova aba)" |
-| Botão de login do cabeçalho | "Fazer login" |
-| Botão secundário do cabeçalho | "Entrar na conta" |
+| Botão de acesso do cabeçalho | "Entrar na conta" (rótulo visível compacto "Entrar" no celular) |
 | Chamada do hero | "Conhecer a plataforma" |
 | Chamada de acesso do hero | "Entrar na conta" |
 
@@ -722,7 +720,7 @@ export const siteConfig = {
 | 1 | Edição de perfil pelo próprio usuário seria recurso futuro (`README.md`, `docs/ROADMAP.md`, `docs/TECNICO.md`, `app/README.md`). | O perfil tem modo de edição com nome, senha e foto; o servidor expõe `PATCH /api/users/me` e `POST /api/users/me/avatar`. | "Edição de perfil" aparece como recurso já desenvolvido. | `app/client/src/pages/shared/ProfileView.tsx`; `app/server/src/routes/users.ts` |
 | 2 | O briefing descreve dados em `INITIAL_DB` na memória, senhas sem hash, ausência de upload e ausência de sessão segura (limitações do protótipo inicial). | A versão atual usa SQLite persistente, hash de senha com bcrypt, sessão em cookie `httpOnly` registrada no servidor e upload de anexos com validação de tipo e tamanho. | A página não menciona limitações que não existem mais. O protótipo é descrito como funcional, com banco persistente local e upload de anexos. | `docs/TECNICO.md` (seções 1 e 6); `app/README.md`; `app/server/src/auth/password.ts`; `app/server/src/auth/session.ts`; `app/server/src/routes/uploads.ts` |
 | 3 | A especificação lista "edição de perfil" entre as melhorias previstas (§5.11). | Recurso implementado (ver item 1). | Item removido da lista de evolução. | Código citado no item 1 |
-| 4 | A especificação fala em "rota existente de login". | Não há rota de URL: o cliente renderiza `LoginPage` quando não há sessão, e o login é `POST /api/auth/login`. | Os dois botões abrem o fluxo de autenticação existente, sem nova rota, tela ou cadastro. | `app/client/src/App.tsx`; `app/server/src/routes/auth.ts` |
+| 4 | A especificação fala em "rota existente de login". | Não há rota de URL: o cliente renderiza `LoginPage` quando não há sessão, e o login é `POST /api/auth/login`. | O botão de acesso abre o fluxo de autenticação existente, sem nova rota, tela ou cadastro. | `app/client/src/App.tsx`; `app/server/src/routes/auth.ts` |
 | 5 | A especificação sugere link para issues "caso o repositório permita". | O código não informa se as issues estão habilitadas. | O link é apresentado como canal disponível, com nota de implementação para removê-lo se as issues estiverem desabilitadas. | `README.md` (repositório público); verificação não possível pelo código |
 | 6 | README e documentos usam "TCC 2026" e mencionam "Projeto Integrador II". | Não há texto público que exija a sigla. | A página usa "projeto acadêmico desenvolvido na ETEC Cravinhos", evitando divergência entre documentos. | `README.md`; `Arquivos_fonte/landing-spec.txt` §5.9 |
 | 7 | A especificação pede "favicon com a identidade do projeto" e Open Graph "quando adequado". | Não existe favicon nem imagem Open Graph no repositório; a marca é tipográfica. | As tags de imagem ficam pendentes de criação de ativo; nenhuma URL de imagem é inventada. | `app/client/index.html`; ausência de `public/` no cliente |

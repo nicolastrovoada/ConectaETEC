@@ -62,13 +62,6 @@ export function LandingHeader({ onRequestLogin }: LandingHeaderProps) {
 
           <div className="ml-auto flex items-center gap-2">
             <Button
-              variant="secondary"
-              onClick={requestLogin}
-              className="min-h-10 whitespace-nowrap px-2.5! text-xs! sm:min-h-11 sm:px-4! sm:text-sm!"
-            >
-              {HEADER.loginLabel}
-            </Button>
-            <Button
               variant="primary"
               onClick={requestLogin}
               aria-label={HEADER.accessLabel}
@@ -117,9 +110,6 @@ export function LandingHeader({ onRequestLogin }: LandingHeaderProps) {
           <div className="space-y-2 border-t border-slate-200 py-4 dark:border-slate-800">
             <Button variant="primary" onClick={requestLogin} className="min-h-12 w-full">
               {HEADER.accessLabel}
-            </Button>
-            <Button variant="secondary" onClick={requestLogin} className="min-h-12 w-full">
-              {HEADER.loginLabel}
             </Button>
           </div>
         </nav>
