@@ -139,6 +139,25 @@ describe("Bootstrap do primeiro coordenador", () => {
     expect(count(db, "auditLogs")).toBe(0)
   })
 
+  it("concorrência: e-mail do bootstrap já inserido por outra instância não lança", () => {
+    const db = freshDb()
+    db.prepare(
+      `INSERT INTO users (id, name, email, password, role, active, avatar, classIds, createdAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run("u-outra-instancia", "Outra Instância", "coordenacao@etec.sp.gov.br", "hash", "coordinator", 1, "O", "[]", "01/08/2026")
+    setBootstrapEnv({
+      BOOTSTRAP_ADMIN_NAME: "Maria Coordenadora",
+      BOOTSTRAP_ADMIN_EMAIL: "coordenacao@etec.sp.gov.br",
+      BOOTSTRAP_ADMIN_PASSWORD: "senhaSegura123",
+    })
+
+    expect(() => bootstrapAdminFromEnv(db)).not.toThrow()
+
+    expect(users(db)).toHaveLength(1)
+    expect(users(db)[0].id).toBe("u-outra-instancia")
+    expect(count(db, "auditLogs")).toBe(0)
+  })
+
   it("sem nenhuma variável definida não cria usuário e não lança", () => {
     const db = freshDb()
     setBootstrapEnv({})
