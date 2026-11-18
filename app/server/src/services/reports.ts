@@ -1,11 +1,112 @@
 import type { DatabaseSync } from "node:sqlite"
 import { getDb } from "../db/connection"
 import { mapClass, mapUser, type ClassRow, type UserRow } from "../db/rows"
-import { startOfToday } from "../lib/dates"
+import { isValidBRDate, startOfToday } from "../lib/dates"
 import { getBalance } from "./points"
 import { currentStreakDays } from "./streak"
-import { levelLabel } from "../shared/types"
-import type { Role } from "../shared/types"
+import { ACTIVITY_TYPE_LABELS, levelLabel } from "../shared/types"
+import type { ActivityType, Role } from "../shared/types"
+
+/**
+ * Filtros comuns aos relatórios da coordenação (Task 4.5).
+ *
+ * `from`/`to` são dias de calendário `YYYY-MM-DD`, inclusivos. Datas fora do
+ * formato ou que não existem (ex.: `2026-02-31`) são IGNORADAS — a rota não
+ * responde 400 por isso, o filtro simplesmente não é aplicado.
+ */
+export interface ReportFilters {
+  from?: string
+  to?: string
+  classId?: string
+  subjectId?: string
+  teacherId?: string
+}
+
+/**
+ * Converte `YYYY-MM-DD` para a chave `AAAAMMDD` usada pelo SQL.
+ *
+ * O regex sozinho não basta: `2026-02-31` tem o formato certo e não é data de
+ * calendário. A conversão para `DD/MM/AAAA` passa por `isValidBRDate`, que
+ * rejeita mês/dia inexistente (a mesma guarda da auditoria). Valor inválido
+ * retorna `undefined` e o filtro é ignorado.
+ */
+export function reportDayKey(value: string | undefined): string | undefined {
+  if (!value) return undefined
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim())
+  if (!match) return undefined
+  const [, year, month, day] = match
+  return isValidBRDate(`${day}/${month}/${year}`) ? `${year}${month}${day}` : undefined
+}
+
+/** Chave de dia (`AAAAMMDD`) do texto `DD/MM/AAAA, HH:MM:SS` gravado por `nowBR()`. */
+function dayKeySql(column: string): string {
+  return `substr(${column},7,4)||substr(${column},4,2)||substr(${column},1,2)`
+}
+
+/** Placeholders `?,?,?` para um `IN (...)` — nunca interpola valores. */
+function placeholders(count: number): string {
+  return Array.from({ length: count }, () => "?").join(",")
+}
+
+/**
+ * Acrescenta ao `WHERE` os filtros de recorte de atividade (`classId`,
+ * `subjectId`, `teacherId`) — sempre por bind parametrizado.
+ */
+function pushActivityFilters(
+  where: string[],
+  params: string[],
+  filters: ReportFilters,
+  alias = "a",
+): void {
+  if (filters.classId) {
+    where.push(`${alias}.classId = ?`)
+    params.push(filters.classId)
+  }
+  if (filters.subjectId) {
+    where.push(`${alias}.subjectId = ?`)
+    params.push(filters.subjectId)
+  }
+  if (filters.teacherId) {
+    where.push(`${alias}.teacherId = ?`)
+    params.push(filters.teacherId)
+  }
+}
+
+/**
+ * Acrescenta ao `WHERE` o período sobre uma coluna de data gravada como
+ * `DD/MM/AAAA, HH:MM:SS`. As duas pontas são inclusivas por DIA.
+ */
+function pushPeriodFilters(
+  where: string[],
+  params: string[],
+  filters: ReportFilters,
+  column: string,
+): void {
+  const from = reportDayKey(filters.from)
+  if (from) {
+    where.push(`${dayKeySql(column)} >= ?`)
+    params.push(from)
+  }
+  const to = reportDayKey(filters.to)
+  if (to) {
+    where.push(`${dayKeySql(column)} <= ?`)
+    params.push(to)
+  }
+}
+
+/** Nome dos alunos ativos entre os ids dados, numa consulta só. */
+function activeStudentNames(db: DatabaseSync, ids: string[]): Map<string, string> {
+  const names = new Map<string, string>()
+  if (ids.length === 0) return names
+  const rows = db
+    .prepare(
+      `SELECT id, name FROM users
+       WHERE role = 'student' AND active = 1 AND id IN (${placeholders(ids.length)})`,
+    )
+    .all(...ids) as unknown as Array<{ id: string; name: string }>
+  for (const row of rows) names.set(row.id, row.name)
+  return names
+}
 
 export interface CompletionRow {
   className: string
@@ -34,92 +135,215 @@ function isTeacherOrCoordinator(role: Role): boolean {
   return role === "teacher" || role === "coordinator"
 }
 
-/** Taxa de conclusão por turma (professor vê apenas suas turmas; coord vê todas). */
-export function completionReport(caller: { role: Role; userId: string }): CompletionRow[] {
+/**
+ * Taxa de conclusão por turma (professor vê apenas suas turmas; coord vê todas).
+ *
+ * Filtros da 4.5 (from/to/classId/subjectId/teacherId):
+ * - `possible` = alunos ATIVOS das turmas no escopo × atividades ativas/não
+ *   excluídas no escopo;
+ * - `done` = entregas `approved` com `submittedAt` dentro do período (sem
+ *   período, todas as aprovadas), contadas apenas para alunos que continuam no
+ *   roster ATIVO da turma — o mesmo recorte de `possible`;
+ * - `teacherId` NÃO amplia o escopo do professor: o conjunto de turmas dele é
+ *   decidido por `class.teacherIds` antes de qualquer filtro de atividade.
+ */
+export function completionReport(
+  caller: { role: Role; userId: string },
+  filters: ReportFilters = {},
+): CompletionRow[] {
   if (!isTeacherOrCoordinator(caller.role)) return []
+  // Escopo do professor é por TURMA (`class.teacherIds`), nunca por autoria:
+  // `teacherId` na query não pode virar uma janela para os agregados de outro
+  // professor nas turmas compartilhadas. Ignorar (em vez de forçar o próprio
+  // id) preserva o comportamento padrão de "todas as atividades das minhas
+  // turmas"; a coordenação continua usando `teacherId` como recorte.
+  if (caller.role === "teacher") filters = { ...filters, teacherId: undefined }
   const db = getDb()
-  const classRows = db.prepare("SELECT * FROM classes").all() as unknown as ClassRow[]
-  const classes = classRows.map(mapClass).filter((c) => c.active)
-  const scoped = caller.role === "teacher" ? classes.filter((c) => c.teacherIds.includes(caller.userId)) : classes
+  const classRows = db
+    .prepare("SELECT * FROM classes ORDER BY name COLLATE NOCASE ASC")
+    .all() as unknown as ClassRow[]
+  let classes = classRows.map(mapClass).filter((c) => c.active)
+  if (caller.role === "teacher") {
+    classes = classes.filter((c) => c.teacherIds.includes(caller.userId))
+  }
+  if (filters.classId) classes = classes.filter((c) => c.id === filters.classId)
+  if (classes.length === 0) return []
 
-  const activitiesByClass = new Map<string, string[]>()
-  for (const c of scoped) {
-    // Soft delete (2.4): a excluída sai do denominador de "possíveis" — contá-la
-    // aqui manteria no relatório uma atividade que não existe mais para o aluno.
-    const activities = db
-      .prepare("SELECT id FROM activities WHERE classId = ? AND status = 'active' AND deletedAt IS NULL")
-      .all(c.id) as unknown as Array<{ id: string }>
-    activitiesByClass.set(c.id, activities.map((a) => a.id))
+  const classIds = classes.map((c) => c.id)
+
+  // Atividades ativas e não excluídas por turma — UMA consulta agregada.
+  const activityWhere = ["a.classId IN (" + placeholders(classIds.length) + ")", "a.status = 'active'", "a.deletedAt IS NULL"]
+  const activityParams: string[] = [...classIds]
+  if (filters.subjectId) {
+    activityWhere.push("a.subjectId = ?")
+    activityParams.push(filters.subjectId)
+  }
+  if (filters.teacherId) {
+    activityWhere.push("a.teacherId = ?")
+    activityParams.push(filters.teacherId)
+  }
+  const activityRows = db
+    .prepare(
+      `SELECT a.classId AS classId, COUNT(*) AS total
+       FROM activities a
+       WHERE ${activityWhere.join(" AND ")}
+       GROUP BY a.classId`,
+    )
+    .all(...activityParams) as unknown as Array<{ classId: string; total: number }>
+  const activitiesByClass = new Map(activityRows.map((r) => [r.classId, Number(r.total)]))
+
+  // Alunos ativos do escopo — uma consulta, e a contagem por turma respeita o
+  // roster de `classes.studentIds` (que pode ter ids inativos ou não-alunos).
+  const allStudentIds = [...new Set(classes.flatMap((c) => c.studentIds))]
+  const activeStudents = activeStudentNames(db, allStudentIds)
+
+  // Entregas aprovadas por turma; período é sobre `submittedAt`.
+  const doneWhere = [
+    "s.status = 'approved'",
+    "a.status = 'active'",
+    "a.deletedAt IS NULL",
+    "a.classId IN (" + placeholders(classIds.length) + ")",
+  ]
+  const doneParams: string[] = [...classIds]
+  if (filters.subjectId) {
+    doneWhere.push("a.subjectId = ?")
+    doneParams.push(filters.subjectId)
+  }
+  if (filters.teacherId) {
+    doneWhere.push("a.teacherId = ?")
+    doneParams.push(filters.teacherId)
+  }
+  pushPeriodFilters(doneWhere, doneParams, filters, "s.submittedAt")
+  const doneRows = db
+    .prepare(
+      `SELECT a.classId AS classId, s.studentId AS studentId, COUNT(*) AS total
+       FROM submissions s
+       JOIN activities a ON a.id = s.activityId
+       WHERE ${doneWhere.join(" AND ")}
+       GROUP BY a.classId, s.studentId`,
+    )
+    .all(...doneParams) as unknown as Array<{ classId: string; studentId: string; total: number }>
+  // Roster ATIVO por turma — o MESMO recorte de `possible` (`activeStudents`).
+  // `done` é somado por (turma, aluno) e só para quem ainda está no roster: um
+  // aluno aprovado que depois saiu da turma ou foi desativado não pode seguir
+  // contando enquanto `possible` deixa de contá-lo. Sem isso `done` excede
+  // `possible` e `pct` passa de 100%.
+  const activeRosterByClass = new Map(
+    classes.map((c) => [c.id, new Set([...new Set(c.studentIds)].filter((id) => activeStudents.has(id)))]),
+  )
+  const doneByClass = new Map<string, number>()
+  for (const row of doneRows) {
+    if (!activeRosterByClass.get(row.classId)?.has(row.studentId)) continue
+    doneByClass.set(row.classId, (doneByClass.get(row.classId) ?? 0) + Number(row.total))
   }
 
-  return scoped.map((c) => {
-    const activityIds = activitiesByClass.get(c.id) ?? []
-    const possible = c.studentIds.length * activityIds.length
-    let done = 0
-    if (activityIds.length > 0) {
-      const placeholders = activityIds.map(() => "?").join(",")
-      const subs = db
-        .prepare(
-          `SELECT COUNT(*) AS total FROM submissions
-           WHERE status = 'approved' AND activityId IN (${placeholders})`,
-        )
-        .get(...activityIds) as { total: number }
-      done = Number(subs.total)
-    }
-    const pct = possible === 0 ? 0 : Math.round((done / possible) * 100)
-    return { className: c.name, course: c.course, students: c.studentIds.length, activities: activityIds.length, possible, done, pct }
+  return classes.map((c) => {
+    const students = activeRosterByClass.get(c.id)?.size ?? 0
+    const activities = activitiesByClass.get(c.id) ?? 0
+    const possible = students * activities
+    const done = doneByClass.get(c.id) ?? 0
+    // Clamp de segurança: com o roster restrito `done <= possible`; o teto
+    // garante que nenhuma inconsistência futura renderize mais de 100%.
+    const pct = possible === 0 ? 0 : Math.min(100, Math.round((done / possible) * 100))
+    return { className: c.name, course: c.course, students, activities, possible, done, pct }
   })
 }
 
-/** Pontos por aluno (professor vê apenas alunos de suas turmas; coord vê todos). */
-export function pointsReport(caller: { role: Role; userId: string }): PointsByStudentRow[] {
+/**
+ * Pontos por aluno (professor vê apenas alunos de suas turmas; coord vê todos).
+ *
+ * Filtros da 4.5:
+ * - `classId` restringe o roster à turma (interseção com o escopo do professor);
+ * - `from`/`to` somam apenas as transações do período (`transactions.createdAt`);
+ * - `subjectId`/`teacherId` restringem às transações ligadas por
+ *   `relatedActivityId` a atividades da matéria/professor.
+ *
+ * Sem filtros, o saldo é o mesmo de `getBalance` (todas as transações). O
+ * cálculo fica em `pointsByStudent` para a rota e os rankings usarem a MESMA
+ * regra de soma e de piso em zero (RN04).
+ */
+export function pointsReport(
+  caller: { role: Role; userId: string },
+  filters: ReportFilters = {},
+): PointsByStudentRow[] {
   if (!isTeacherOrCoordinator(caller.role)) return []
+  // Mesmo motivo de `completionReport`: o recorte do professor é a TURMA dele,
+  // e `teacherId` de terceiro é ignorado para não expor agregados alheios.
+  if (caller.role === "teacher") filters = { ...filters, teacherId: undefined }
   const db = getDb()
   const userRows = db
     .prepare("SELECT * FROM users WHERE role = 'student' AND active = 1")
     .all() as unknown as UserRow[]
   const students = userRows.map(mapUser)
 
+  const classRows = db.prepare("SELECT * FROM classes").all() as unknown as ClassRow[]
+  const classes = classRows.map(mapClass)
+  const classById = new Map(classes.map((c) => [c.id, c.name]))
+
   let allowedStudentIds: Set<string> | null = null
   if (caller.role === "teacher") {
-    const classRows = db.prepare("SELECT * FROM classes").all() as unknown as ClassRow[]
-    const teacherClasses = classRows
-      .map(mapClass)
-      .filter((c) => c.teacherIds.includes(caller.userId))
+    const teacherClasses = classes.filter((c) => c.teacherIds.includes(caller.userId))
     allowedStudentIds = new Set(teacherClasses.flatMap((c) => c.studentIds))
   }
-
-  const classById = new Map<string, string>()
-  for (const c of db.prepare("SELECT * FROM classes").all() as unknown as ClassRow[]) {
-    classById.set(c.id, c.name)
+  if (filters.classId) {
+    const klass = classes.find((c) => c.id === filters.classId)
+    const classStudents = new Set(klass?.studentIds ?? [])
+    allowedStudentIds = allowedStudentIds
+      ? new Set([...allowedStudentIds].filter((id) => classStudents.has(id)))
+      : classStudents
   }
 
-  return students
-    .filter((s) => (allowedStudentIds ? allowedStudentIds.has(s.id) : true))
+  const scoped = students.filter((s) => (allowedStudentIds ? allowedStudentIds.has(s.id) : true))
+  const points = pointsByStudent(db, scoped.map((s) => s.id), filters)
+
+  return scoped
     .map((s) => {
-      const className = classById.get(s.classIds[0] ?? "") ?? ""
-      const balance = getBalance(s.id)
+      const className = filters.classId
+        ? classById.get(filters.classId) ?? ""
+        : classById.get(s.classIds[0] ?? "") ?? ""
+      const balance = points.get(s.id) ?? 0
       return { studentName: s.name, className, balance, level: levelLabel(balance) }
     })
-    .sort((a, b) => b.balance - a.balance)
+    // Desempate por nome: sem ele, empates de saldo dependem da ordem física
+    // do banco e a lista "muda" entre execuções sem nenhum dado novo.
+    .sort(
+      (a, b) =>
+        b.balance - a.balance ||
+        a.studentName.localeCompare(b.studentName, "pt-BR", { sensitivity: "base" }),
+    )
 }
 
-/** Atividades por tipo (coordenação). */
-export function activitiesByTypeReport(): ActivitiesByTypeRow[] {
+/**
+ * Atividades por tipo (coordenação).
+ *
+ * Filtros da 4.5: classId/subjectId/teacherId recortam a atividade e from/to
+ * recorta o DIA de `activities.createdAt` (as duas pontas inclusivas). Sem
+ * filtros, mantém a distribuição de todas as atividades não excluídas —
+ * qualquer status, como antes.
+ */
+export function activitiesByTypeReport(filters: ReportFilters = {}): ActivitiesByTypeRow[] {
   const db = getDb()
   // Soft delete (2.4): a distribuição por tipo conta só o que o app mostra.
+  const where = ["a.deletedAt IS NULL"]
+  const params: string[] = []
+  pushActivityFilters(where, params, filters)
+  pushPeriodFilters(where, params, filters, "a.createdAt")
   const rows = db
-    .prepare("SELECT type, COUNT(*) AS count FROM activities WHERE deletedAt IS NULL GROUP BY type ORDER BY type")
-    .all() as unknown as Array<{ type: string; count: number }>
-  const labels: Record<string, string> = {
-    academic: "Pedagógica",
-    school_action: "Ação Escolar",
-    event: "Evento",
-    library: "Biblioteca",
-    support: "Suporte",
-    other: "Outro",
-  }
-  return rows.map((r) => ({ type: r.type, label: labels[r.type] ?? r.type, count: Number(r.count) }))
+    .prepare(
+      `SELECT a.type AS type, COUNT(*) AS count
+       FROM activities a
+       WHERE ${where.join(" AND ")}
+       GROUP BY a.type
+       ORDER BY a.type`,
+    )
+    .all(...params) as unknown as Array<{ type: string; count: number }>
+  // Rótulo único do domínio (`shared/types`): um mapa local aqui já divergiu
+  // uma vez do que a UI exibe.
+  return rows.map((r) => ({
+    type: r.type,
+    label: ACTIVITY_TYPE_LABELS[r.type as ActivityType] ?? r.type,
+    count: Number(r.count),
+  }))
 }
 
 /** Uma atividade do professor com as contagens de entrega (Task 4.2). */
@@ -200,10 +424,13 @@ interface SubmissionCountRow {
 function countSubmissionsByActivity(
   db: DatabaseSync,
   activityIds: string[],
+  period: { from?: string; to?: string } = {},
 ): Map<string, SubmissionCountRow> {
   const counts = new Map<string, SubmissionCountRow>()
   if (activityIds.length === 0) return counts
-  const placeholders = activityIds.map(() => "?").join(",")
+  const where = ["activityId IN (" + placeholders(activityIds.length) + ")"]
+  const params: string[] = [...activityIds]
+  pushPeriodFilters(where, params, period, "submittedAt")
   const rows = db
     .prepare(
       `SELECT activityId AS activityId,
@@ -212,10 +439,10 @@ function countSubmissionsByActivity(
               SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) AS rejected,
               SUM(CASE WHEN delayed = 1 THEN 1 ELSE 0 END) AS late
        FROM submissions
-       WHERE activityId IN (${placeholders})
+       WHERE ${where.join(" AND ")}
        GROUP BY activityId`,
     )
-    .all(...activityIds) as unknown as SubmissionCountRow[]
+    .all(...params) as unknown as SubmissionCountRow[]
   for (const row of rows) {
     counts.set(row.activityId, {
       activityId: row.activityId,
@@ -369,8 +596,408 @@ export function teacherPerformanceReport(caller: {
   }
 }
 
+// ─── Task 4.5 — relatório completo da coordenação ───────────────────────────
+
+/** Uma atividade no relatório detalhado da coordenação. */
+export interface ActivityDetailRow {
+  activityId: string
+  title: string
+  type: string
+  subject: string
+  className: string
+  teacherName: string
+  deadline: string
+  createdAt: string
+  deliveries: number
+  approved: number
+  rejected: number
+  pending: number
+  late: number
+  donePct: number
+}
+
+interface ActivityDetailJoinRow {
+  activityId: string
+  title: string
+  type: string
+  subject: string
+  className: string
+  teacherName: string | null
+  teacherId: string
+  deadline: string
+  createdAt: string
+}
+
+/**
+ * Linha interna do relatório detalhado: carrega o `teacherId` só para o resumo
+ * por professor agrupar homônimos por identidade. O payload público de
+ * `activity-detail` continua sem esse campo (contrato da 4.5).
+ */
+interface ActivityDetailInternalRow extends ActivityDetailRow {
+  teacherId: string
+}
+
+/**
+ * `GET /api/reports/activity-detail` (4.5) — uma linha por atividade ativa e
+ * não excluída, com as contagens de entrega no período.
+ *
+ * Ordenação determinística: prazo (dia de calendário), depois título e id. O
+ * prazo é `DD/MM/AAAA`, então a ordenação usa a mesma chave `AAAAMMDD` do
+ * filtro — nunca comparação textual do formato brasileiro.
+ */
+export function activityDetailReport(filters: ReportFilters = {}): ActivityDetailRow[] {
+  // O `teacherId` existe só na linha interna: `teacher-summary` precisa dele
+  // para não fundir dois professores homônimos, mas o contrato público da 4.5
+  // não o expõe aqui.
+  return activityDetailRows(filters).map((row) => ({
+    activityId: row.activityId,
+    title: row.title,
+    type: row.type,
+    subject: row.subject,
+    className: row.className,
+    teacherName: row.teacherName,
+    deadline: row.deadline,
+    createdAt: row.createdAt,
+    deliveries: row.deliveries,
+    approved: row.approved,
+    rejected: row.rejected,
+    pending: row.pending,
+    late: row.late,
+    donePct: row.donePct,
+  }))
+}
+
+function activityDetailRows(filters: ReportFilters = {}): ActivityDetailInternalRow[] {
+  const db = getDb()
+  const where = ["a.status = 'active'", "a.deletedAt IS NULL"]
+  const params: string[] = []
+  pushActivityFilters(where, params, filters)
+  const rows = db
+    .prepare(
+      `SELECT a.id AS activityId,
+              a.title AS title,
+              a.type AS type,
+              sub.name AS subject,
+              cls.name AS className,
+              u.name AS teacherName,
+              a.teacherId AS teacherId,
+              a.deadline AS deadline,
+              a.createdAt AS createdAt
+       FROM activities a
+       JOIN subjects sub ON sub.id = a.subjectId
+       JOIN classes cls ON cls.id = a.classId
+       LEFT JOIN users u ON u.id = a.teacherId
+       WHERE ${where.join(" AND ")}
+       ORDER BY ${dayKeySql("a.deadline")} ASC,
+                a.title COLLATE NOCASE ASC,
+                a.id ASC`,
+    )
+    .all(...params) as unknown as ActivityDetailJoinRow[]
+
+  const counts = countSubmissionsByActivity(
+    db,
+    rows.map((r) => r.activityId),
+    filters,
+  )
+  return rows.map((row) => {
+    const count = counts.get(row.activityId)
+    const deliveries = count?.deliveries ?? 0
+    const approved = count?.approved ?? 0
+    const rejected = count?.rejected ?? 0
+    // RN03: `pending` é tudo que não recebeu veredito final.
+    const pending = deliveries - approved - rejected
+    const late = count?.late ?? 0
+    const donePct = deliveries === 0 ? 0 : Math.round((approved / deliveries) * 100)
+    return {
+      activityId: row.activityId,
+      title: row.title,
+      type: row.type,
+      subject: row.subject,
+      className: row.className,
+      teacherName: row.teacherName ?? row.teacherId,
+      teacherId: row.teacherId,
+      deadline: row.deadline,
+      createdAt: row.createdAt,
+      deliveries,
+      approved,
+      rejected,
+      pending,
+      late,
+      donePct,
+    }
+  })
+}
+
+/** Uma linha do resumo por professor (conclusão e atraso agregados). */
+export interface TeacherSummaryRow {
+  teacherId: string
+  teacherName: string
+  activities: number
+  deliveries: number
+  approved: number
+  late: number
+  /** `Math.round(approved / deliveries * 100)`; 0 quando não há entrega. */
+  approvalPct: number
+}
+
+/**
+ * `GET /api/reports/teacher-summary` (4.5) — conclusão e atraso POR PROFESSOR.
+ *
+ * Reutiliza a mesma linha de `activity-detail` (mesmos filtros, mesmo período e
+ * mesmo recorte de atividade ativa/não excluída) e agrega em memória por
+ * `teacherId`. O id — não o nome — é a chave: dois professores homônimos são
+ * duas linhas com somas separadas. Ordenação por nome em pt-BR, com o id como
+ * desempate determinístico.
+ */
+export function teacherSummaryReport(filters: ReportFilters = {}): TeacherSummaryRow[] {
+  const byTeacher = new Map<string, Omit<TeacherSummaryRow, "approvalPct">>()
+  for (const row of activityDetailRows(filters)) {
+    const acc = byTeacher.get(row.teacherId) ?? {
+      teacherId: row.teacherId,
+      teacherName: row.teacherName,
+      activities: 0,
+      deliveries: 0,
+      approved: 0,
+      late: 0,
+    }
+    acc.activities += 1
+    acc.deliveries += row.deliveries
+    acc.approved += row.approved
+    acc.late += row.late
+    byTeacher.set(row.teacherId, acc)
+  }
+  return [...byTeacher.values()]
+    .map((acc) => ({
+      ...acc,
+      approvalPct: acc.deliveries === 0 ? 0 : Math.round((acc.approved / acc.deliveries) * 100),
+    }))
+    .sort(
+      (a, b) =>
+        a.teacherName.localeCompare(b.teacherName, "pt-BR", { sensitivity: "base" }) ||
+        a.teacherId.localeCompare(b.teacherId),
+    )
+}
+
+export interface ClassRankingRow {
+  studentName: string
+  points: number
+  level: string
+}
+
+export interface ClassRankingGroup {
+  className: string
+  course: string
+  rows: ClassRankingRow[]
+}
+
+/**
+ * Soma de pontos por aluno no recorte da 4.5.
+ *
+ * Sem `subjectId`/`teacherId`, soma TODAS as transações do aluno (o saldo
+ * líquido, como `getBalance`). Com um dos dois, restringe às transações ligadas
+ * por `relatedActivityId` a atividades da matéria/professor — bônus, ajuste,
+ * resgate e sequência não têm vínculo de atividade e por isso não entram.
+ *
+ * O saldo nunca é negativo (RN04): soma negativa é entregue como 0.
+ */
+function pointsByStudent(
+  db: DatabaseSync,
+  studentIds: string[],
+  filters: ReportFilters,
+): Map<string, number> {
+  const points = new Map<string, number>()
+  if (studentIds.length === 0) return points
+
+  const joins: string[] = []
+  const where = ["t.studentId IN (" + placeholders(studentIds.length) + ")"]
+  const params: string[] = [...studentIds]
+  const scopedToActivity = Boolean(filters.subjectId || filters.teacherId)
+  if (scopedToActivity) {
+    // Decisão 3 do V3: pontos de atividade excluída PERMANECEM. O JOIN existe
+    // só para atribuir matéria/professor à transação — filtrar `deletedAt`
+    // aqui faria o saldo do recorte divergir de `getBalance` e do ranking por
+    // turma, que mantêm o ponto.
+    joins.push("JOIN activities a ON a.id = t.relatedActivityId")
+    if (filters.subjectId) {
+      where.push("a.subjectId = ?")
+      params.push(filters.subjectId)
+    }
+    if (filters.teacherId) {
+      where.push("a.teacherId = ?")
+      params.push(filters.teacherId)
+    }
+    if (filters.classId) {
+      where.push("a.classId = ?")
+      params.push(filters.classId)
+    }
+  }
+  pushPeriodFilters(where, params, filters, "t.createdAt")
+
+  const rows = db
+    .prepare(
+      `SELECT t.studentId AS studentId, SUM(t.amount) AS total
+       FROM transactions t
+       ${joins.join(" ")}
+       WHERE ${where.join(" AND ")}
+       GROUP BY t.studentId`,
+    )
+    .all(...params) as unknown as Array<{ studentId: string; total: number }>
+  for (const row of rows) points.set(row.studentId, Math.max(0, Number(row.total)))
+  return points
+}
+
+/**
+ * `GET /api/reports/rankings/classes` (4.5) — ranking por turma.
+ *
+ * Turmas ativas; alunos ativos das turmas. Um aluno em duas turmas aparece nos
+ * dois grupos (uma linha por turma/aluno), que é o que "ranking por turma"
+ * significa. Grupos por nome da turma; linhas por pontos desc e nome asc.
+ */
+export function classRankingsReport(filters: ReportFilters = {}): ClassRankingGroup[] {
+  const db = getDb()
+  let classes = (
+    db.prepare("SELECT * FROM classes ORDER BY name COLLATE NOCASE ASC").all() as unknown as ClassRow[]
+  )
+    .map(mapClass)
+    .filter((c) => c.active)
+  if (filters.classId) classes = classes.filter((c) => c.id === filters.classId)
+  if (classes.length === 0) return []
+
+  const allStudentIds = [...new Set(classes.flatMap((c) => c.studentIds))]
+  const names = activeStudentNames(db, allStudentIds)
+  const points = pointsByStudent(db, allStudentIds, filters)
+
+  return classes.map((klass) => {
+    const rows = [...new Set(klass.studentIds)]
+      .filter((id) => names.has(id))
+      .map((id) => {
+        const balance = points.get(id) ?? 0
+        return {
+          studentName: names.get(id) ?? id,
+          points: balance,
+          level: levelLabel(balance),
+        }
+      })
+      .sort(
+        (a, b) =>
+          b.points - a.points ||
+          a.studentName.localeCompare(b.studentName, "pt-BR", { sensitivity: "base" }),
+      )
+    return { className: klass.name, course: klass.course, rows }
+  })
+}
+
+export interface SubjectRankingRow {
+  studentName: string
+  className: string
+  points: number
+  level: string
+}
+
+export interface SubjectRankingGroup {
+  subjectId: string
+  subjectName: string
+  icon: string
+  rows: SubjectRankingRow[]
+}
+
+interface SubjectRankingJoinRow {
+  subjectId: string
+  subjectName: string
+  icon: string
+  studentName: string
+  className: string
+  total: number
+}
+
+/**
+ * `GET /api/reports/rankings/subjects` (4.5) — pontos por matéria.
+ *
+ * Só transações `type = 'activity'` com `relatedActivityId`, no período de
+ * `transactions.createdAt`, com os filtros classId/subjectId/teacherId
+ * aplicados à atividade. Grupos por matéria (só os que têm linha), linhas por
+ * pontos desc e nome asc.
+ */
+export function subjectRankingsReport(filters: ReportFilters = {}): SubjectRankingGroup[] {
+  const db = getDb()
+  // Atividade soft-deleted continua no JOIN (decisão 3: os pontos permanecem);
+  // o JOIN só serve para descobrir a matéria/professor da transação. Já o
+  // ranking é de pessoas: aluno inativo/não-aluno e turma inativa saem, em
+  // paridade com `classRankingsReport`.
+  const where = [
+    "t.type = 'activity'",
+    "t.relatedActivityId IS NOT NULL",
+    "u.active = 1",
+    "u.role = 'student'",
+    "cls.active = 1",
+  ]
+  const params: string[] = []
+  if (filters.classId) {
+    where.push("a.classId = ?")
+    params.push(filters.classId)
+  }
+  if (filters.subjectId) {
+    where.push("a.subjectId = ?")
+    params.push(filters.subjectId)
+  }
+  if (filters.teacherId) {
+    where.push("a.teacherId = ?")
+    params.push(filters.teacherId)
+  }
+  pushPeriodFilters(where, params, filters, "t.createdAt")
+
+  const rows = db
+    .prepare(
+      `SELECT sub.id AS subjectId,
+              sub.name AS subjectName,
+              sub.icon AS icon,
+              u.name AS studentName,
+              cls.name AS className,
+              SUM(t.amount) AS total
+       FROM transactions t
+       JOIN activities a ON a.id = t.relatedActivityId
+       JOIN subjects sub ON sub.id = a.subjectId
+       JOIN users u ON u.id = t.studentId
+       JOIN classes cls ON cls.id = a.classId
+       WHERE ${where.join(" AND ")}
+       GROUP BY sub.id, sub.name, sub.icon, u.id, u.name, cls.id, cls.name
+       ORDER BY sub.name COLLATE NOCASE ASC,
+                total DESC,
+                u.name COLLATE NOCASE ASC`,
+    )
+    .all(...params) as unknown as SubjectRankingJoinRow[]
+
+  const groups = new Map<string, SubjectRankingGroup>()
+  for (const row of rows) {
+    let group = groups.get(row.subjectId)
+    if (!group) {
+      group = {
+        subjectId: row.subjectId,
+        subjectName: row.subjectName,
+        icon: row.icon,
+        rows: [],
+      }
+      groups.set(row.subjectId, group)
+    }
+    const points = Math.max(0, Number(row.total))
+    group.rows.push({
+      studentName: row.studentName,
+      className: row.className,
+      points,
+      level: levelLabel(points),
+    })
+  }
+  return [...groups.values()]
+}
+
 function escapeCsv(value: string | number): string {
-  const s = String(value)
+  let s = String(value)
+  // OWASP CSV injection: Excel/Sheets interpretam `=`, `+`, `-`, `@`, TAB e CR
+  // no início da célula como fórmula/comando. O apóstrofo força texto; só
+  // strings entram aqui (números negativos continuam números).
+  if (typeof value === "string" && /^[=+\-@\t\r]/.test(s)) {
+    s = `'${s}`
+  }
   if (s.includes(";") || s.includes('"') || s.includes("\n") || s.includes("\r")) {
     return `"${s.replaceAll('"', '""')}"`
   }

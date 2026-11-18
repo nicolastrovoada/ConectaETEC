@@ -8,6 +8,7 @@ import { useToast } from "../../context/ToastContext"
 import { Card } from "../../components/ui/Card"
 import { Button } from "../../components/ui/Button"
 import { ErrorState, LoadingBlock } from "../../components/ui/EmptyState"
+import { UserAvatar } from "../../components/ui/UserAvatar"
 
 /** Chave usada para detectar a subida de nível entre sessões (celebração 1x). */
 const LEVEL_STORAGE_KEY = "conectaetec:lastLevel"
@@ -82,9 +83,11 @@ export function StudentHome({ onNavigate }: StudentHomeProps) {
       {/* Boas-vindas */}
       <Card className="p-6 bg-gradient-to-br from-blue-600 to-blue-800 border-none">
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
-          <div className={`w-16 h-16 rounded-full bg-gradient-to-br ${roleTheme.avatar} flex items-center justify-center text-white text-2xl font-black shadow-lg ring-4 ring-white/20`} aria-hidden="true">
-            {user.avatar}
-          </div>
+          <UserAvatar
+            user={user}
+            className={`w-16 h-16 rounded-full bg-gradient-to-br ${roleTheme.avatar} flex items-center justify-center text-white text-2xl font-black shadow-lg ring-4 ring-white/20`}
+            textClassName="text-2xl font-black"
+          />
           <div className="flex-1">
             <h2 className="text-2xl font-extrabold text-white" style={{ fontFamily: "Nunito, sans-serif" }}>
               Olá, {user.name.split(" ")[0]}! 👋

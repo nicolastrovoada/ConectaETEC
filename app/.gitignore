@@ -16,3 +16,6 @@ server/data/*.db
 # .superpowers/sdd/.gitignore; esta linha cobre o diretório inteiro, para que um
 # relatório escrito fora de sdd/ não apareça no git status nem seja commitado.
 .superpowers/
+.vercel
+.env*
+api/server.js

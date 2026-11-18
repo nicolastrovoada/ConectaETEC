@@ -19,6 +19,17 @@ function pngFile(payload: string): Buffer {
   return Buffer.concat([PNG_SIGNATURE, Buffer.from(payload)])
 }
 
+/**
+ * Arquivos da RAIZ de uploads (evidências). A subpasta `avatars/` é criada por
+ * `ensureUploadsDir` para o perfil e não é byte órfão de anexo.
+ */
+function rootFiles(): string[] {
+  return fs
+    .readdirSync(config.uploadsDir)
+    .filter((name) => fs.statSync(path.join(config.uploadsDir, name)).isFile())
+    .sort()
+}
+
 // Lacuna de cobertura: bordas do upload — limite de tamanho, validação de
 // storedName (traversal) e substituição de anexo antigo no reenvio.
 describe("Upload de evidências — casos de borda", () => {
@@ -48,7 +59,7 @@ describe("Upload de evidências — casos de borda", () => {
     // O `limits.fileSize` do multer aborta DEPOIS de gravar o arquivo no
     // `uploadsDir`, e nesse caminho o `handle` da rota não roda — então o
     // `cleanupUploadedFiles` (que mora dentro dele) não pode ser o responsável.
-    const arquivosAntes = fs.readdirSync(config.uploadsDir)
+    const arquivosAntes = rootFiles()
     const res = await ana
       .post("/api/activities/a1/submissions")
       .field("comment", "mega arquivo")
@@ -59,19 +70,19 @@ describe("Upload de evidências — casos de borda", () => {
     expect(res.status).toBe(422)
     expect(res.body.error).toContain("5 MB")
     expect(res.body.details).toBe("LIMIT_FILE_SIZE")
-    expect(fs.readdirSync(config.uploadsDir), "byte órfão do arquivo acima do limite").toEqual(
+    expect(rootFiles(), "byte órfão do arquivo acima do limite").toEqual(
       arquivosAntes,
     )
   })
 
   it("4 anexos numa entrega → 422 sem deixar byte no disco", async () => {
     const ana = await setupAna()
-    const arquivosAntes = fs.readdirSync(config.uploadsDir)
+    const arquivosAntes = rootFiles()
     const muitos = ana.post("/api/activities/a1/submissions").field("comment", "lote grande")
     for (let i = 0; i < 4; i++) muitos.attach("attachments", pngFile(`f${i}`), `f${i}.png`)
     const res = await muitos
     expect(res.status).toBe(422)
-    expect(fs.readdirSync(config.uploadsDir), "byte órfão do lote acima do limite").toEqual(arquivosAntes)
+    expect(rootFiles(), "byte órfão do lote acima do limite").toEqual(arquivosAntes)
   })
 
   it("validateStoredName rejeita traversal e caminhos", () => {
@@ -138,6 +149,57 @@ describe("Upload de evidências — casos de borda", () => {
     // 4) Disco: arquivo antigo removido, novo presente
     expect(fs.existsSync(path.join(config.uploadsDir, secondAtt.storedName))).toBe(true)
     expect(fs.existsSync(path.join(config.uploadsDir, firstAtt.storedName))).toBe(false)
+  })
+
+  it("anexo de entrega de atividade excluída → 403 para todos, com auditoria (C4)", async () => {
+    const db = prepareDb()
+    createActivity(db, {
+      id: "a-c4",
+      title: "Atividade que será excluída",
+      teacherId: USERS.marcelo.id,
+      classId: "c1",
+    })
+    // Controle: uma atividade VIVA no mesmo cenário, para provar que o 403 não
+    // é o comportamento genérico da rota.
+    createActivity(db, {
+      id: "a-c4-viva",
+      title: "Atividade que continua viva",
+      teacherId: USERS.marcelo.id,
+      classId: "c1",
+    })
+
+    const ana = await loginAgent(app, USERS.ana.email)
+    const enviar = async (activityId: string): Promise<string> => {
+      const res = await ana
+        .post(`/api/activities/${activityId}/submissions`)
+        .field("comment", `entrega de ${activityId}`)
+        .attach("attachments", pngFile(`anexo-${activityId}`), `${activityId}.png`)
+      expect(res.status).toBe(201)
+      return (res.body.data.attachments[0] as { storedName: string }).storedName
+    }
+    const excluida = await enviar("a-c4")
+    const viva = await enviar("a-c4-viva")
+
+    const marcelo = await loginAgent(app, USERS.marcelo.email)
+    const deleted = await marcelo.delete("/api/activities/a-c4")
+    expect(deleted.status, `exclusão falhou: ${JSON.stringify(deleted.body)}`).toBe(200)
+
+    const coord = await loginAgent(app, USERS.juliana.email)
+    for (const agent of [coord, ana, marcelo]) {
+      const res = await agent.get(`/uploads/${excluida}`)
+      expect(res.status, `anexo de atividade excluída foi servido para ${JSON.stringify(res.body)}`).toBe(403)
+    }
+
+    const negadas = (await coord.get("/api/audit?action=ACCESS_DENIED")).body.data as Array<{
+      entityId: string
+    }>
+    expect(
+      negadas.some((l) => l.entityId === `/uploads/${excluida}`),
+      `sem ACCESS_DENIED para o anexo excluído: ${JSON.stringify(negadas)}`,
+    ).toBe(true)
+
+    // O anexo da atividade viva continua acessível ao responsável.
+    expect((await coord.get(`/uploads/${viva}`)).status).toBe(200)
   })
 
   it("reenvio SEM anexo mantém os anexos existentes", async () => {

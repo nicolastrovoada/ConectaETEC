@@ -1,13 +1,25 @@
+import fs from "node:fs"
+import path from "node:path"
 import { describe, it, expect, beforeAll } from "vitest"
 import request from "supertest"
 import { makeApp, prepareDb, loginAgent, USERS } from "./helpers"
+import { config } from "../config"
+import { avatarDir, ensureUploadsDir } from "../lib/uploads"
 import type { Express } from "express"
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+function pngFile(payload: string): Buffer {
+  return Buffer.concat([PNG_SIGNATURE, Buffer.from(payload)])
+}
 
 describe("Usuários (RF02, RF13)", () => {
   let app: Express
 
   beforeAll(() => {
     prepareDb()
+    // O teste de PDF lê `avatarDir()`: rodando sozinho (`-t "PDF"`) a pasta
+    // ainda não existe, porque nenhum teste de upload anterior a criou.
+    ensureUploadsDir()
     app = makeApp()
   })
 
@@ -91,5 +103,303 @@ describe("Usuários (RF02, RF13)", () => {
     const any = await coord.get("/api/users/u3/points")
     expect(any.status).toBe(200)
     expect(any.body.data.balance).toBe(0)
+  })
+
+  it("PATCH /me atualiza o próprio nome sem passar pela rota de coordenação", async () => {
+    const ana = await loginAgent(app, USERS.ana.email)
+    const res = await ana.patch("/api/users/me").send({ name: "Ana Clara Souza" })
+    expect(res.status).toBe(200)
+    expect(res.body.data.name).toBe("Ana Clara Souza")
+    expect(res.body.data).not.toHaveProperty("password")
+  })
+
+  it("PATCH /me é .strict(): papel, turmas, situação, e-mail e avatar são 400", async () => {
+    const ana = await loginAgent(app, USERS.ana.email)
+    const invalidos = [
+      { role: "coordinator" },
+      { classIds: ["c2"] },
+      { active: false },
+      { email: "outra@etec.sp.gov.br" },
+      { avatar: "X" },
+    ]
+    for (const payload of invalidos) {
+      const res = await ana.patch("/api/users/me").send(payload)
+      expect(res.status, JSON.stringify(payload)).toBe(400)
+    }
+  })
+
+  it("PATCH /me sem alterações → 400 NO_CHANGES", async () => {
+    const ana = await loginAgent(app, USERS.ana.email)
+    const vazio = await ana.patch("/api/users/me").send({})
+    expect(vazio.status).toBe(400)
+    expect(vazio.body.details).toBe("NO_CHANGES")
+
+    // Só `currentPassword`, sem `newPassword`, também não altera nada.
+    const soSenhaAtual = await ana.patch("/api/users/me").send({ currentPassword: "123456" })
+    expect(soSenhaAtual.status).toBe(400)
+    expect(soSenhaAtual.body.details).toBe("NO_CHANGES")
+  })
+
+  it("PATCH /me com currentPassword errada → 400 e senha intacta", async () => {
+    const ana = await loginAgent(app, USERS.ana.email)
+    const res = await ana.patch("/api/users/me").send({
+      currentPassword: "senha-errada",
+      newPassword: "novaSenha9",
+    })
+    expect(res.status).toBe(400)
+    expect(res.body.details).toBe("INVALID_CURRENT_PASSWORD")
+
+    const login = await request(app).post("/api/auth/login").send({
+      email: USERS.ana.email,
+      password: USERS.ana.password,
+    })
+    expect(login.status).toBe(200)
+  })
+
+  it("upload de avatar salva a imagem, troca a antiga e só serve autenticado", async () => {
+    const ana = await loginAgent(app, USERS.ana.email)
+    const res = await ana
+      .post("/api/users/me/avatar")
+      .attach("avatar", pngFile("foto-1"), { filename: "foto.png", contentType: "image/png" })
+
+    expect(res.status).toBe(200)
+    const avatar = res.body.data.avatar as string
+    expect(avatar).toMatch(/^\/uploads\/avatars\/.+\.png$/)
+    const storedName = path.basename(avatar)
+    expect(fs.existsSync(path.join(avatarDir(), storedName))).toBe(true)
+
+    const file = await ana.get(avatar)
+    expect(file.status).toBe(200)
+    expect(file.headers["content-type"]).toBe("image/png")
+    expect(file.headers["x-content-type-options"]).toBe("nosniff")
+
+    const anonymous = await request(app).get(avatar)
+    expect(anonymous.status).toBe(401)
+
+    // Trocar a foto apaga o arquivo anterior do disco.
+    const troca = await ana
+      .post("/api/users/me/avatar")
+      .attach("avatar", pngFile("foto-2"), { filename: "foto2.png", contentType: "image/png" })
+    expect(troca.status).toBe(200)
+    expect(troca.body.data.avatar).not.toBe(avatar)
+    expect(fs.existsSync(path.join(avatarDir(), storedName))).toBe(false)
+  })
+
+  it("avatar com conteúdo PDF disfarçado de PNG → 422 e nada fica no disco", async () => {
+    const ana = await loginAgent(app, USERS.ana.email)
+    const before = fs.readdirSync(avatarDir()).sort()
+    const res = await ana
+      .post("/api/users/me/avatar")
+      .attach("avatar", Buffer.from("%PDF-1.4\nconteudo-pdf"), {
+        filename: "foto.png",
+        contentType: "image/png",
+      })
+    expect(res.status).toBe(422)
+    expect(res.body.details).toBe("INVALID_FILE_CONTENT")
+    expect(fs.readdirSync(avatarDir()).sort()).toEqual(before)
+  })
+
+  it("avatar com conteúdo desconhecido e extensão .png → 422 com a mensagem do fluxo", async () => {
+    const ana = await loginAgent(app, USERS.ana.email)
+    const before = fs.readdirSync(avatarDir()).sort()
+    // Texto puro não bate com NENHUMA assinatura conhecida: o ramo é o de
+    // conteúdo irrecuperável, não o de divergência entre extensão e conteúdo.
+    const res = await ana
+      .post("/api/users/me/avatar")
+      .attach("avatar", Buffer.from("isto nao e uma imagem"), {
+        filename: "foto.png",
+        contentType: "image/png",
+      })
+    expect(res.status).toBe(422)
+    expect(res.body.details).toBe("INVALID_FILE_CONTENT")
+    expect(res.body.error).toBe("Envie uma imagem (JPEG/PNG/WebP/GIF) para a foto de perfil.")
+    expect(fs.readdirSync(avatarDir()).sort()).toEqual(before)
+  })
+
+  it("avatar acima de 2 MB → 422 LIMIT_FILE_SIZE e nada fica no disco", async () => {
+    const ana = await loginAgent(app, USERS.ana.email)
+    const before = fs.readdirSync(avatarDir()).sort()
+    const grande = Buffer.alloc(config.maxAvatarBytes + 1)
+    PNG_SIGNATURE.copy(grande)
+
+    const res = await ana
+      .post("/api/users/me/avatar")
+      .attach("avatar", grande, { filename: "grande.png", contentType: "image/png" })
+
+    expect(res.status).toBe(422)
+    expect(res.body.details).toBe("LIMIT_FILE_SIZE")
+    expect(fs.readdirSync(avatarDir()).sort()).toEqual(before)
+  })
+
+  it("avatar inexistente e nome inválido respondem 404 uniforme", async () => {
+    const ana = await loginAgent(app, USERS.ana.email)
+
+    const inexistente = await ana.get("/uploads/avatars/nao-existe.png")
+    expect(inexistente.status).toBe(404)
+    expect(inexistente.body.details).toBe("FILE_MISSING")
+
+    // Path traversal percent-encoded: o param chega decodificado ao guard.
+    const traversal = await ana.get("/uploads/avatars/%2e%2e%2fsegredo.png")
+    expect(traversal.status).toBe(404)
+  })
+
+  it("coordenação edita usuário com foto sem apagar o avatar", async () => {
+    const beatriz = await loginAgent(app, USERS.beatriz.email)
+    const upload = await beatriz
+      .post("/api/users/me/avatar")
+      .attach("avatar", pngFile("foto-beatriz"), { filename: "beatriz.png", contentType: "image/png" })
+    expect(upload.status).toBe(200)
+    const avatar = upload.body.data.avatar as string
+    expect(avatar).toMatch(/^\/uploads\/avatars\/.+\.png$/)
+    const storedName = path.basename(avatar)
+    expect(fs.existsSync(path.join(avatarDir(), storedName))).toBe(true)
+
+    // O modal da coordenação manda `name` em toda edição; o avatar de foto
+    // precisa sobreviver à mudança de nome/papel/situação.
+    const coord = await loginAgent(app, USERS.juliana.email)
+    const res = await coord.patch(`/api/users/${USERS.beatriz.id}`).send({
+      name: "Beatriz Almeida Lima",
+      role: "teacher",
+      active: true,
+      classIds: ["c2"],
+    })
+    expect(res.status).toBe(200)
+    expect(res.body.data.avatar).toBe(avatar)
+    expect(res.body.data.name).toBe("Beatriz Almeida Lima")
+
+    const me = await beatriz.get("/api/auth/me")
+    expect(me.status).toBe(200)
+    expect(me.body.data.avatar).toBe(avatar)
+    expect(fs.existsSync(path.join(avatarDir(), storedName))).toBe(true)
+  })
+
+  it("auditoria registra USER_UPDATED para nome e foto do próprio perfil", async () => {
+    const ana = await loginAgent(app, USERS.ana.email)
+    const novoNome = "Ana Auditoria"
+    const nome = await ana.patch("/api/users/me").send({ name: novoNome })
+    expect(nome.status).toBe(200)
+
+    const foto = await ana
+      .post("/api/users/me/avatar")
+      .attach("avatar", pngFile("foto-auditoria"), { filename: "auditoria.png", contentType: "image/png" })
+    expect(foto.status).toBe(200)
+
+    const coord = await loginAgent(app, USERS.juliana.email)
+    const logs = (await coord.get("/api/audit?action=USER_UPDATED")).body.data as Array<{
+      userId: string
+      description: string
+    }>
+    expect(
+      logs.some((l) => l.userId === USERS.ana.id && l.description.includes(`nome → ${novoNome}`)),
+    ).toBe(true)
+    expect(
+      logs.some((l) => l.userId === USERS.ana.id && l.description.includes("foto de perfil")),
+    ).toBe(true)
+  })
+
+  it("troca de senha própria revoga outras sessões e mantém a atual", async () => {
+    const atual = await loginAgent(app, USERS.ana.email)
+    const outra = await loginAgent(app, USERS.ana.email)
+
+    const res = await atual.patch("/api/users/me").send({
+      currentPassword: USERS.ana.password,
+      newPassword: "novaSenha9",
+    })
+    expect(res.status).toBe(200)
+    expect(res.body.data).not.toHaveProperty("password")
+
+    // A sessão que fez a troca continua válida...
+    const ainda = await atual.get("/api/auth/me")
+    expect(ainda.status).toBe(200)
+    // ...e a outra caiu.
+    const revogada = await outra.get("/api/auth/me")
+    expect(revogada.status).toBe(401)
+
+    const antiga = await request(app).post("/api/auth/login").send({
+      email: USERS.ana.email,
+      password: USERS.ana.password,
+    })
+    expect(antiga.status).toBe(401)
+
+    const nova = await request(app).post("/api/auth/login").send({
+      email: USERS.ana.email,
+      password: "novaSenha9",
+    })
+    expect(nova.status).toBe(200)
+  })
+
+  it("busca de usuários é cega a acento e não trata % como curinga", async () => {
+    prepareDb()
+    const coord = await loginAgent(app, USERS.juliana.email)
+    const criado = await coord.post("/api/users").send({
+      name: "João Pedro Alves",
+      email: "jpedro@etec.sp.gov.br",
+      password: "123456",
+      role: "student",
+      classId: "c1",
+    })
+    expect(criado.status, `criação falhou: ${JSON.stringify(criado.body)}`).toBe(201)
+
+    const nomes = (res: { body: { data: Array<{ name: string; role: string }> } }) =>
+      res.body.data.map((u) => u.name)
+
+    const minusculo = await coord.get("/api/users?search=joao")
+    expect(minusculo.status).toBe(200)
+    expect(nomes(minusculo)).toContain("João Pedro Alves")
+
+    const maiusculo = await coord.get("/api/users?search=JOAO")
+    expect(maiusculo.status).toBe(200)
+    expect(nomes(maiusculo)).toContain("João Pedro Alves")
+
+    // `%` é literal, não curinga: sem ninguém com `%` no nome/e-mail, a busca
+    // devolve vazio em vez de todos.
+    const curinga = await coord.get("/api/users?search=%25")
+    expect(curinga.status).toBe(200)
+    expect(curinga.body.data).toEqual([])
+
+    // Filtro de papel continua valendo junto com a busca.
+    const comPapel = await coord.get("/api/users?role=student&search=joao")
+    expect(comPapel.status).toBe(200)
+    const alunos = comPapel.body.data as Array<{ name: string; role: string }>
+    expect(alunos.map((u) => u.name)).toEqual(["João Pedro Alves"])
+    expect(alunos.every((u) => u.role === "student")).toBe(true)
+
+    // `search` com espaços é trim.
+    const comEspacos = await coord.get("/api/users?search=%20joao%20")
+    expect(nomes(comEspacos)).toContain("João Pedro Alves")
+  })
+
+  it("professor cadastrado com turma entra em teacherIds, não em studentIds (RF02)", async () => {
+    prepareDb()
+    const coord = await loginAgent(app, USERS.juliana.email)
+    const prof = await coord.post("/api/users").send({
+      name: "Professor Novo",
+      email: "prof.novo@etec.sp.gov.br",
+      password: "123456",
+      role: "teacher",
+      classId: "c3",
+    })
+    expect(prof.status, `criação do professor falhou: ${JSON.stringify(prof.body)}`).toBe(201)
+
+    type ClassRow = { id: string; studentIds: string[]; teacherIds: string[] }
+    const classes = await coord.get("/api/classes")
+    const c3 = (classes.body.data as ClassRow[]).find((c) => c.id === "c3")
+    if (!c3) throw new Error("turma c3 não veio em GET /api/classes")
+    expect(c3.teacherIds).toContain(prof.body.data.id)
+    expect(c3.studentIds).not.toContain(prof.body.data.id)
+
+    // O vínculo de ALUNO continua indo para studentIds.
+    const aluno = await coord.post("/api/users").send({
+      name: "Aluno Novo",
+      email: "aluno.novo@etec.sp.gov.br",
+      password: "123456",
+      role: "student",
+      classId: "c1",
+    })
+    expect(aluno.status, `criação do aluno falhou: ${JSON.stringify(aluno.body)}`).toBe(201)
+    const c1 = ((await coord.get("/api/classes")).body.data as ClassRow[]).find((c) => c.id === "c1")
+    if (!c1) throw new Error("turma c1 não veio em GET /api/classes")
+    expect(c1.studentIds).toContain(aluno.body.data.id)
+    expect(c1.teacherIds).not.toContain(aluno.body.data.id)
   })
 })

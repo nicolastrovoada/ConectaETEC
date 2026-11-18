@@ -7,6 +7,7 @@ import { useUser } from "../../context/UserContext"
 import { Card, SectionHeader } from "../../components/ui/Card"
 import { BarChart } from "../../components/ui/BarChart"
 import { ErrorState, LoadingBlock } from "../../components/ui/EmptyState"
+import { UserAvatar } from "../../components/ui/UserAvatar"
 
 export function CoordinatorOverview() {
   const { user, roleTheme } = useUser()
@@ -40,9 +41,11 @@ export function CoordinatorOverview() {
 
       <Card className="p-6 bg-gradient-to-br from-orange-500 to-red-600 border-none mb-6">
         <div className="flex items-center gap-4">
-          <div className={`w-16 h-16 rounded-full bg-gradient-to-br ${roleTheme.avatar} flex items-center justify-center text-white text-2xl font-black shadow-lg ring-4 ring-white/20`} aria-hidden="true">
-            {user.avatar}
-          </div>
+          <UserAvatar
+            user={user}
+            className={`w-16 h-16 rounded-full bg-gradient-to-br ${roleTheme.avatar} flex items-center justify-center text-white text-2xl font-black shadow-lg ring-4 ring-white/20`}
+            textClassName="text-2xl font-black"
+          />
           <div>
             <h2 className="text-2xl font-extrabold text-white" style={{ fontFamily: "Nunito, sans-serif" }}>
               Coordenação — {user.name.split(" ")[0] || user.name}

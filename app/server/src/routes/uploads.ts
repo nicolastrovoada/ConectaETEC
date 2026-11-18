@@ -7,7 +7,7 @@ import { getDb } from "../db/connection"
 import { findStudyContentById, findSubmissionById } from "../db/queries"
 import { notFound } from "../lib/errors"
 import { handle } from "../lib/http"
-import { validateStoredName } from "../lib/uploads"
+import { avatarDir, validateStoredName } from "../lib/uploads"
 import { canReadStudyContentAttachment } from "../services/studyContents"
 import type { SafeUser, StudyContent } from "../shared/types"
 
@@ -93,21 +93,67 @@ function canReadSubmissionFile(
   db: ReturnType<typeof getDb>,
   origin: SubmissionFile,
 ): boolean {
+  // Atividade excluída (soft delete) é invisível — e o anexo de uma entrega
+  // dela também. A consulta vem ANTES dos branches de papel de propósito:
+  // coordenação e aluno autor recebem o mesmo 403 (o call site audita), porque
+  // o recurso excluído sai do ar para todos. A coordenação continua vendo a
+  // atividade na aba "Excluídas" e, se restaurá-la, o anexo volta a ser servido.
+  const activity = db
+    .prepare("SELECT teacherId, deletedAt FROM activities WHERE id = ?")
+    .get(origin.activityId) as { teacherId: string; deletedAt: string | null } | undefined
+  if (!activity || activity.deletedAt !== null) return false
+
   if (user.role === "coordinator") return true
   if (user.role === "student") return origin.studentId === user.id
   // Professor e funcionário: só o responsável pela atividade da entrega — é o
   // mesmo isolamento por dono de `canViewSubmission` e das listagens (2.5):
   // atender a turma não abre o arquivo de um colega.
-  //
-  // Pendência conhecida (fora do escopo desta tarefa, C4): a consulta abaixo não
-  // filtra `deletedAt`, então o anexo de uma entrega de atividade EXCLUÍDA
-  // continua sendo servido ao responsável. A decisão do humano é esconder
-  // (`AND deletedAt IS NULL` + 403), em task própria.
-  const activity = db.prepare("SELECT teacherId FROM activities WHERE id = ?").get(origin.activityId) as
-    | { teacherId: string }
-    | undefined
-  return activity?.teacherId === user.id
+  return activity.teacherId === user.id
 }
+
+/**
+ * GET /uploads/avatars/:storedName — foto de perfil.
+ *
+ * Rota PRÓPRIA (registrada antes de `/:storedName`): um avatar não tem linha em
+ * `attachments`/`study_content_attachments`, então a rota genérica o trataria
+ * como inexistente. A autorização é a existência de um usuário apontando para
+ * aquele arquivo; qualquer sessão autenticada pode ver a foto (elas aparecem em
+ * listas e no header), mas nunca sem cookie. Nome inválido, linha ausente e
+ * arquivo ausente respondem o MESMO 404 — não vazamos existência.
+ */
+const AVATAR_CONTENT_TYPES: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+}
+
+uploadsRouter.get(
+  "/avatars/:storedName",
+  requireAuth,
+  handle((req, res) => {
+    const storedName = req.params.storedName
+    if (!validateStoredName(storedName)) throw notFound("Arquivo não encontrado.", "FILE_MISSING")
+
+    const db = getDb()
+    const row = db
+      .prepare("SELECT 1 AS found FROM users WHERE avatar = ? LIMIT 1")
+      .get(`/uploads/avatars/${storedName}`)
+    if (!row) throw notFound("Arquivo não encontrado.", "FILE_MISSING")
+
+    const contentType = AVATAR_CONTENT_TYPES[path.extname(storedName).toLowerCase()]
+    const filePath = path.join(avatarDir(), storedName)
+    if (!contentType || !fs.existsSync(filePath)) {
+      throw notFound("Arquivo não encontrado.", "FILE_MISSING")
+    }
+
+    res.setHeader("Content-Type", contentType)
+    res.setHeader("X-Content-Type-Options", "nosniff")
+    res.setHeader("Cache-Control", "private, max-age=300")
+    res.sendFile(filePath)
+  }),
+)
 
 uploadsRouter.get(
   "/:storedName",

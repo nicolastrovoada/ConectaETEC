@@ -9,6 +9,7 @@ import { Card, SectionHeader } from "../../components/ui/Card"
 import { Field, Input, Select } from "../../components/ui/Field"
 import { Modal } from "../../components/ui/Modal"
 import { EmptyState, ErrorState, LoadingBlock } from "../../components/ui/EmptyState"
+import { UserAvatar } from "../../components/ui/UserAvatar"
 
 const ROLE_FILTERS: Array<{ value: Role | ""; label: string }> = [
   { value: "", label: "Todos os papéis" },
@@ -133,9 +134,11 @@ export function CoordinatorUsersView() {
                   <tr key={user.id} className="border-b border-gray-50 dark:border-slate-800/60 last:border-0 hover:bg-gray-50 dark:hover:bg-slate-800/40 transition-colors">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-full bg-gray-100 dark:bg-slate-700 flex items-center justify-center text-sm font-bold text-gray-700 dark:text-slate-200 shrink-0" aria-hidden="true">
-                          {user.avatar}
-                        </div>
+                        <UserAvatar
+                          user={user}
+                          className="w-9 h-9 rounded-full bg-gray-100 dark:bg-slate-700 flex items-center justify-center text-sm font-bold text-gray-700 dark:text-slate-200 shrink-0"
+                          textClassName="text-sm font-bold"
+                        />
                         <div className="min-w-0">
                           <p className="font-bold text-gray-900 dark:text-white truncate max-w-40">{user.name}</p>
                           <p className="text-xs text-gray-500 dark:text-slate-400 truncate">{user.email}</p>

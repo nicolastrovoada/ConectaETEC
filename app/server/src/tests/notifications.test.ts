@@ -82,19 +82,42 @@ describe("Notificações — leitura (RF10)", () => {
     expect(n1?.read).toBe(false)
   })
 
-  it("404 ao marcar notificação de outro usuário (isolamento por dono)", async () => {
+  it("403 ao marcar notificação de outro usuário (isolamento por dono) + auditoria RN06", async () => {
     const ana = await setupAna()
     // n5 pertence a u6 (marcelo)
     const res = await ana.patch("/api/notifications/n5/read")
-    expect(res.status).toBe(404)
-    const list = await ana.get("/api/notifications")
-    expect(list.body.data.some((n: { id: string }) => n.id === "n5")).toBe(false)
+    expect(res.status).toBe(403)
+    expect(res.body.error).toContain("Sem permissão")
+
+    // A notificação de outro usuário não foi tocada.
+    const marcelo = await loginAgent(app, USERS.marcelo.email)
+    const doMarcelo = await marcelo.get("/api/notifications")
+    const n5 = doMarcelo.body.data.find((n: { id: string }) => n.id === "n5")
+    expect(n5?.read).toBe(false)
+
+    const coord = await loginAgent(app, USERS.juliana.email)
+    const negadas = (await coord.get("/api/audit?action=ACCESS_DENIED")).body.data as Array<{
+      userId: string
+      entity: string
+      entityId: string
+    }>
+    const tentativa = negadas.find(
+      (l) => l.userId === USERS.ana.id && l.entityId === "/api/notifications/n5/read",
+    )
+    expect(tentativa, `sem ACCESS_DENIED da notificação alheia: ${JSON.stringify(negadas)}`).toBeDefined()
+    expect(tentativa?.entity).toBe("Route")
   })
 
-  it("404 para notificação inexistente", async () => {
+  it("404 para notificação inexistente, sem auditoria de acesso negado", async () => {
     const ana = await setupAna()
     const res = await ana.patch("/api/notifications/nao-existe/read")
     expect(res.status).toBe(404)
+
+    const coord = await loginAgent(app, USERS.juliana.email)
+    const negadas = (await coord.get("/api/audit?action=ACCESS_DENIED")).body.data as Array<{
+      userId: string
+    }>
+    expect(negadas.filter((l) => l.userId === USERS.ana.id)).toEqual([])
   })
 })
 

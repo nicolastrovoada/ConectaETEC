@@ -52,7 +52,7 @@ authRouter.post(
     }
     clearLoginFailures(ip, email)
     deleteExpiredSessions()
-    const token = createSession(user.id)
+    const token = createSession(user.id, mapSafeUser(userToRow(user)))
     res.cookie(config.cookieName, token, {
       httpOnly: true,
       secure: config.secureCookies,

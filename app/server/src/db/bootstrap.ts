@@ -81,10 +81,11 @@ export function bootstrapAdminFromEnv(
 
   const id = uuid()
   const avatar = (parsed.name.charAt(0) || "?").toUpperCase()
+  let created = false
 
   withTransaction(db, () => {
-    db.prepare(
-      `INSERT INTO users (id, name, email, password, role, active, avatar, classIds, createdAt)
+    const result = db.prepare(
+      `INSERT OR IGNORE INTO users (id, name, email, password, role, active, avatar, classIds, createdAt)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id,
@@ -97,6 +98,8 @@ export function bootstrapAdminFromEnv(
       "[]",
       todayBR(),
     )
+    created = Number(result.changes) > 0
+    if (!created) return
 
     db.prepare(
       `INSERT INTO auditLogs (id, userId, action, entity, entityId, description, timestamp)
@@ -111,6 +114,8 @@ export function bootstrapAdminFromEnv(
       nowBR(),
     )
   })
+
+  if (!created) return
 
   // Apenas o e-mail: a senha nunca vai para o log.
   console.log(

@@ -5,7 +5,7 @@
 // (data/hora pt-BR + autor) e a inércia do cartão excluído (nada de
 // editar/excluir/entregas). Nada de asserção de forma de prop.
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from "vitest"
-import { render, screen, within } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { http, HttpResponse } from "msw"
 import { setupServer } from "msw/node"
@@ -311,5 +311,72 @@ describe("Coordenação — aba de atividades excluídas (2.6)", () => {
     await user.click(aba("Excluídas"))
     await painelExcluidas().findByText(EXCLUIDA.title)
     expect(titulo).toBeInTheDocument()
+  })
+})
+
+// ─── V3 Fase 4 · Tarefa 4.7 — a coordenação vê TODAS as atividades ────────────
+// A lista de "Ativas" é a do `ActivityManager` com `role="coordinator"` e
+// `canManageActivity={() => true}`: a coordenação não é escopada por dono e
+// gerencia a atividade de qualquer professor. O cenário tem duas atividades de
+// professores DIFERENTES (o `u9` da coordenação não é dono de nenhuma) e o que
+// se fixa é que as duas aparecem com "Excluir" e que as duas podem ser
+// excluídas — o `DELETE` chega ao servidor para cada uma.
+describe("Coordenação — todas as atividades da escola (4.7)", () => {
+  const DO_PROF_A = atividade({
+    id: "a-prof-a",
+    title: "Prova de Matemática",
+    teacherId: "u-prof-a",
+  })
+  const DO_PROF_B = atividade({
+    id: "a-prof-b",
+    title: "Feira de Ciências",
+    teacherId: "u-prof-b",
+    subjectId: "m2",
+    classId: "c2",
+  })
+
+  it("lista atividades de dois professores e exclui as duas", async () => {
+    const user = userEvent.setup()
+    const deletados: string[] = []
+    ativas = [DO_PROF_A, DO_PROF_B]
+    // O `DELETE` real tira a linha da listagem sem refresh (mesmo fluxo do
+    // `ActivityManager`): o handler abaixo espelha isso e registra os ids.
+    server.use(
+      http.delete("/api/activities/:id", ({ params }) => {
+        const id = String(params.id)
+        deletados.push(id)
+        const alvo = ativas.find((a) => a.id === id)
+        ativas = ativas.filter((a) => a.id !== id)
+        return HttpResponse.json({ data: { ...alvo, deletedAt: "28/09/2026, 10:00:00", deletedBy: "u9" } })
+      }),
+    )
+    renderView()
+
+    // As duas atividades chegam na aba "Ativas", sem filtro de "minhas": são de
+    // professores diferentes e nenhuma é da coordenação (u9).
+    expect(await screen.findByText(DO_PROF_A.title)).toBeInTheDocument()
+    expect(await screen.findByText(DO_PROF_B.title)).toBeInTheDocument()
+    // `canManageActivity` sempre true para a coordenação: cada cartão oferece
+    // editar E excluir, não só as atividades do próprio dono.
+    expect(screen.getAllByRole("button", { name: /Excluir/ })).toHaveLength(2)
+    expect(screen.getAllByRole("button", { name: /Editar/ })).toHaveLength(2)
+
+    // Primeira exclusão: a confirmação é obrigatória e o DELETE sai com o id.
+    await user.click(screen.getAllByRole("button", { name: /Excluir/ })[0])
+    expect(deletados).toHaveLength(0)
+    await user.click(screen.getByRole("button", { name: /Confirmar exclusão/ }))
+
+    await waitFor(() => expect(deletados).toEqual([DO_PROF_A.id]))
+    await waitFor(() => expect(screen.queryByText(DO_PROF_A.title)).not.toBeInTheDocument())
+
+    // A segunda continua na tela e também pode ser excluída.
+    expect(screen.getByText(DO_PROF_B.title)).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: /Excluir/ }))
+    await user.click(screen.getByRole("button", { name: /Confirmar exclusão/ }))
+
+    await waitFor(() => expect(deletados).toEqual([DO_PROF_A.id, DO_PROF_B.id]))
+    await waitFor(() => expect(screen.queryByText(DO_PROF_B.title)).not.toBeInTheDocument())
+    // A lista ficou vazia e o estado vazio assume, sem erro de permissão.
+    expect(screen.getByText("Nenhuma atividade encontrada")).toBeInTheDocument()
   })
 })
