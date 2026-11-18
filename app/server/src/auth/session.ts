@@ -45,18 +45,15 @@ function ensureLocalSession(token: string, claims: SessionClaims): void {
   const db = getDb()
   const session = db.prepare("SELECT token FROM sessions WHERE token = ?").get(token)
   if (!session) {
-    db.prepare("INSERT INTO sessions (token, userId, createdAt, expiresAt) VALUES (?, ?, ?, ?)").run(
-      token,
-      claims.u,
-      claims.iat,
-      claims.exp,
-    )
+    db.prepare(
+      "INSERT OR IGNORE INTO sessions (token, userId, createdAt, expiresAt) VALUES (?, ?, ?, ?)",
+    ).run(token, claims.u, claims.iat, claims.exp)
   }
   const user = db.prepare("SELECT id FROM users WHERE id = ?").get(claims.u)
   if (!user) {
     const snapshot = claims.user
     db.prepare(
-      `INSERT INTO users (id, name, email, password, role, active, avatar, classIds, createdAt)
+      `INSERT OR IGNORE INTO users (id, name, email, password, role, active, avatar, classIds, createdAt)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       snapshot.id,
