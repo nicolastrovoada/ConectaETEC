@@ -18,3 +18,4 @@ server/data/*.db
 .superpowers/
 .vercel
 .env*
+api/server.js

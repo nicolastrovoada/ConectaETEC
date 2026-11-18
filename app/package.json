@@ -17,10 +17,12 @@
     "build": "npm run build -w server && npm run build -w client",
     "typecheck": "npm run typecheck -w server && npm run typecheck -w client",
     "test": "npm run test -w server && npm run test -w client",
-    "start": "npm run start -w server"
+    "start": "npm run start -w server",
+    "vercel-build": "node scripts/build-vercel.mjs && npm run build"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.7.0"
   },
   "allowScripts": {

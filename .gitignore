@@ -85,3 +85,5 @@ desktop.ini
 !app/README.md
 !docs/ROADMAP.md
 !app/docs/api-contract.md
+
+.vercel
