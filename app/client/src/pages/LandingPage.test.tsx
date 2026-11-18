@@ -27,7 +27,9 @@ describe("LandingPage", () => {
     const header = screen.getByRole("banner")
     const accessButtons = within(header)
       .getAllByRole("button")
-      .filter((button) => /entrar|fazer login/i.test(button.textContent ?? ""))
+      .filter((button) =>
+        /entrar na conta|fazer login/i.test(button.getAttribute("aria-label") ?? button.textContent ?? ""),
+      )
 
     expect(accessButtons).toHaveLength(1)
     expect(screen.queryByRole("button", { name: "Fazer login" })).not.toBeInTheDocument()
@@ -37,19 +39,30 @@ describe("LandingPage", () => {
     expect(onRequestLogin).toHaveBeenCalledTimes(1)
   })
 
-  it("oferece um único CTA de acesso no menu mobile", async () => {
+  it("oferece um único CTA de acesso no menu mobile e abre o login", async () => {
     const user = userEvent.setup()
-    render(<LandingPage onRequestLogin={() => {}} />)
+    const onRequestLogin = vi.fn()
+    render(<LandingPage onRequestLogin={onRequestLogin} />)
 
     await user.click(screen.getByRole("button", { name: "Abrir menu de navegação" }))
 
     const panel = document.getElementById("menu-landing") as HTMLElement
     const accessButtons = within(panel)
       .getAllByRole("button")
-      .filter((button) => /entrar|fazer login/i.test(button.textContent ?? ""))
+      .filter((button) =>
+        /entrar na conta|fazer login/i.test(button.getAttribute("aria-label") ?? button.textContent ?? ""),
+      )
 
     expect(accessButtons).toHaveLength(1)
     expect(within(panel).queryByRole("button", { name: "Fazer login" })).not.toBeInTheDocument()
+
+    await user.click(accessButtons[0])
+
+    expect(onRequestLogin).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole("button", { name: "Abrir menu de navegação" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    )
   })
 
   it("abre o menu mobile e fecha com Escape devolvendo o foco ao botão", async () => {

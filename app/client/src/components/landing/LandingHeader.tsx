@@ -107,7 +107,7 @@ export function LandingHeader({ onRequestLogin }: LandingHeaderProps) {
               </li>
             ))}
           </ul>
-          <div className="space-y-2 border-t border-slate-200 py-4 dark:border-slate-800">
+          <div className="border-t border-slate-200 py-4 dark:border-slate-800">
             <Button variant="primary" onClick={requestLogin} className="min-h-12 w-full">
               {HEADER.accessLabel}
             </Button>
